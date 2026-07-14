@@ -200,6 +200,14 @@ xcopy /y "$(SolutionDir)external\plist\lib\$(PlatformTarget)\*.dll" $(OutDir)</C
     <ClInclude Include="CImGuiManager.h" />
     <ClInclude Include="CSDLPlayer.h" />
     <ClInclude Include="FgUtf8Utils.h" />
+    <ClInclude Include="resource.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="AirPlayServer.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="AirPlayServer.ico" />
+    <None Include="GenerateIcon.ps1" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

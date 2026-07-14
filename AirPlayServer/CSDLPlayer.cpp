@@ -4,6 +4,7 @@
 #include <math.h>    // For powf() in volume conversion
 #include <new>
 #include "CAutoLock.h"
+#include "resource.h"
 
 // Windows Core Audio API for querying system audio device format
 #include <mmdeviceapi.h>
@@ -73,56 +74,20 @@ namespace {
 		FreeLibrary(dwm);
 	}
 
-	void ApplyWindowIcon(SDL_Window* window)
+	void ApplyNativeWindowIcon(HWND window)
 	{
 		if (window == NULL) return;
-		SDL_Surface* icon = SDL_CreateRGBSurfaceWithFormat(
-			0, 32, 32, 32, SDL_PIXELFORMAT_RGBA32);
-		if (icon == NULL) return;
-		if (SDL_MUSTLOCK(icon) && SDL_LockSurface(icon) != 0) {
-			SDL_FreeSurface(icon);
-			return;
-		}
 
-		Uint32 transparent = SDL_MapRGBA(icon->format, 0, 0, 0, 0);
-		Uint32 tile = SDL_MapRGBA(icon->format, 35, 61, 96, 255);
-		Uint32 tileEdge = SDL_MapRGBA(icon->format, 57, 86, 123, 255);
-		Uint32 accent = SDL_MapRGBA(icon->format, 97, 163, 250, 255);
-		Uint32* pixels = (Uint32*)icon->pixels;
-		int pitch = icon->pitch / (int)sizeof(Uint32);
-		for (int y = 0; y < 32; ++y) {
-			for (int x = 0; x < 32; ++x) pixels[y * pitch + x] = transparent;
-		}
+		HINSTANCE instance = GetModuleHandleW(NULL);
+		HICON largeIcon = (HICON)LoadImageW(instance, MAKEINTRESOURCEW(IDI_APP_ICON),
+			IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON),
+			LR_DEFAULTCOLOR | LR_SHARED);
+		HICON smallIcon = (HICON)LoadImageW(instance, MAKEINTRESOURCEW(IDI_APP_ICON),
+			IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON),
+			LR_DEFAULTCOLOR | LR_SHARED);
 
-		// Rounded navy tile with a quiet one-pixel edge.
-		for (int y = 2; y <= 29; ++y) {
-			for (int x = 2; x <= 29; ++x) {
-				int cornerX = x < 8 ? 8 - x : (x > 23 ? x - 23 : 0);
-				int cornerY = y < 8 ? 8 - y : (y > 23 ? y - 23 : 0);
-				if (cornerX * cornerX + cornerY * cornerY > 36) continue;
-				bool edge = x == 2 || x == 29 || y == 2 || y == 29 ||
-					cornerX * cornerX + cornerY * cornerY >= 25;
-				pixels[y * pitch + x] = edge ? tileEdge : tile;
-			}
-		}
-
-		// AirPlay screen and upward projector triangle, matching the home mark.
-		for (int y = 8; y <= 17; ++y) {
-			for (int x = 8; x <= 23; ++x) {
-				bool border = x <= 9 || x >= 22 || y <= 9 || y >= 16;
-				if (border) pixels[y * pitch + x] = accent;
-			}
-		}
-		for (int y = 16; y <= 25; ++y) {
-			int halfWidth = (y - 16) * 6 / 9;
-			for (int x = 16 - halfWidth; x <= 16 + halfWidth; ++x) {
-				pixels[y * pitch + x] = accent;
-			}
-		}
-
-		if (SDL_MUSTLOCK(icon)) SDL_UnlockSurface(icon);
-		SDL_SetWindowIcon(window, icon);
-		SDL_FreeSurface(icon);
+		if (largeIcon != NULL) SendMessageW(window, WM_SETICON, ICON_BIG, (LPARAM)largeIcon);
+		if (smallIcon != NULL) SendMessageW(window, WM_SETICON, ICON_SMALL, (LPARAM)smallIcon);
 	}
 }
 
@@ -374,6 +339,7 @@ bool CSDLPlayer::init()
 	if (SDL_GetWindowWMInfo(m_window, &wmInfo)) {
 		m_hwnd = wmInfo.info.win.window;
 		ApplyNativeWindowTheme(m_hwnd);
+		ApplyNativeWindowIcon(m_hwnd);
 	}
 
 	// Initialize ImGui with SDL2 backends
@@ -1619,7 +1585,6 @@ void CSDLPlayer::initVideo(int width, int height)
 		printf("Could not create window: %s\n", SDL_GetError());
 		return;
 	}
-	ApplyWindowIcon(m_window);
 	SDL_SetWindowMinimumSize(m_window, MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT);
 
 	// Create GPU-accelerated renderer (no VSync - minimizes frame latency)
