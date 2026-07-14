@@ -21,7 +21,7 @@ A high-performance AirPlay receiver for Windows with real-time video streaming a
 ## Features
 
 - **Full AirPlay Support**: Stream video, audio, and mirror your screen from iOS/macOS devices
-- **Quality Presets**: Good Quality (30 FPS, Lanczos), Balanced (60 FPS, bilinear), Fast Speed (60 FPS, nearest-neighbor)
+- **Quality Presets**: Best (30 FPS), Balanced (60 FPS), and Low latency (60 FPS)
 - **Smooth Playback**: Frame pacing with optimized rendering for stutter-free video
 - **Low Latency**: Efficient YUV to RGB conversion with GPU texture upload
 - **Resizable Window**: Live window resizing with instant feedback
@@ -41,18 +41,21 @@ A high-performance AirPlay receiver for Windows with real-time video streaming a
 |-----|--------|
 | **H** | Toggle overlay UI |
 | **F** / **Double-click** | Toggle fullscreen |
-| **F1** | Toggle performance graphs |
+| **F1** | Toggle diagnostics while connected (temporarily replaces controls) |
+| **R** | Rotate video 90° clockwise |
+| **Mouse wheel** | Zoom video from fit to 5× |
+| **Left-drag** (while zoomed) | Pan around the zoomed video |
 | Mouse movement | Shows cursor (auto-hides after 5s) |
 
 ### Quality Presets
 
-Changeable in real-time from the home screen or overlay:
+Changeable in real-time from the connected-session overlay:
 
 | Preset | FPS | Scaling | Use Case |
 |--------|-----|---------|----------|
-| Good Quality | 30 | Lanczos | Best image quality |
-| Balanced | 60 | Bilinear | Default, smooth + sharp |
-| Fast Speed | 60 | Nearest-neighbor | Lowest latency |
+| Best | 30 | Best available | Sharpest image quality |
+| Balanced | 60 | Best available | Default, smooth + sharp |
+| Low latency | 60 | Linear | Fastest response |
 
 ## Troubleshooting
 

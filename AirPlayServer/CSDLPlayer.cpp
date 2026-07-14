@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <malloc.h>  // For _aligned_malloc/_aligned_free
 #include <math.h>    // For powf() in volume conversion
+#include <new>
 #include "CAutoLock.h"
 
 // Windows Core Audio API for querying system audio device format
@@ -13,7 +14,117 @@
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "winmm.lib")
 
-// GPU handles YUV→RGB conversion via SDL2's D3D11 pixel shader (BT.709 mode)
+// GPU handles YUV→RGB conversion through SDL2's renderer-specific YUV shader
+
+namespace {
+	constexpr float MIN_VIDEO_ZOOM = 1.0f;
+	constexpr float MAX_VIDEO_ZOOM = 5.0f;
+	constexpr float VIDEO_ZOOM_STEP = 1.10f;
+	constexpr float VIDEO_PAN_DRAG_THRESHOLD = 4.0f;
+	constexpr DWORD DISCONNECT_NOTICE_MS = 1400;
+	constexpr DWORD DISCONNECT_FADE_IN_MS = 160;
+	constexpr DWORD DISCONNECT_FADE_OUT_MS = 320;
+	constexpr int MIN_WINDOW_WIDTH = 560;
+	constexpr int MIN_WINDOW_HEIGHT = 420;
+
+	struct SConnectionStateChange
+	{
+		bool connected;
+		bool hasDeviceName;
+		char deviceName[256];
+	};
+
+	int SDLCALL KeepNonConnectionStateEvents(void*, SDL_Event* event)
+	{
+		if (event != NULL && event->type == SDL_USEREVENT &&
+			event->user.code == CONNECTION_STATE_CHANGED_CODE) {
+			delete (SConnectionStateChange*)event->user.data1;
+			event->user.data1 = NULL;
+			return 0;
+		}
+		return 1;
+	}
+
+	float ClampFloat(float value, float minimum, float maximum)
+	{
+		if (value < minimum) return minimum;
+		if (value > maximum) return maximum;
+		return value;
+	}
+
+	void ApplyNativeWindowTheme(HWND window)
+	{
+		if (window == NULL) return;
+		HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+		if (dwm == NULL) return;
+		typedef HRESULT(WINAPI* DwmSetWindowAttributeFn)(HWND, DWORD, LPCVOID, DWORD);
+		DwmSetWindowAttributeFn setAttribute = (DwmSetWindowAttributeFn)GetProcAddress(dwm, "DwmSetWindowAttribute");
+		if (setAttribute != NULL) {
+			const DWORD useImmersiveDarkMode = 20;
+			const DWORD captionColorAttribute = 35;
+			const DWORD textColorAttribute = 36;
+			BOOL enabled = TRUE;
+			COLORREF captionColor = RGB(10, 13, 18);
+			COLORREF textColor = RGB(238, 241, 246);
+			setAttribute(window, useImmersiveDarkMode, &enabled, sizeof(enabled));
+			setAttribute(window, captionColorAttribute, &captionColor, sizeof(captionColor));
+			setAttribute(window, textColorAttribute, &textColor, sizeof(textColor));
+		}
+		FreeLibrary(dwm);
+	}
+
+	void ApplyWindowIcon(SDL_Window* window)
+	{
+		if (window == NULL) return;
+		SDL_Surface* icon = SDL_CreateRGBSurfaceWithFormat(
+			0, 32, 32, 32, SDL_PIXELFORMAT_RGBA32);
+		if (icon == NULL) return;
+		if (SDL_MUSTLOCK(icon) && SDL_LockSurface(icon) != 0) {
+			SDL_FreeSurface(icon);
+			return;
+		}
+
+		Uint32 transparent = SDL_MapRGBA(icon->format, 0, 0, 0, 0);
+		Uint32 tile = SDL_MapRGBA(icon->format, 35, 61, 96, 255);
+		Uint32 tileEdge = SDL_MapRGBA(icon->format, 57, 86, 123, 255);
+		Uint32 accent = SDL_MapRGBA(icon->format, 97, 163, 250, 255);
+		Uint32* pixels = (Uint32*)icon->pixels;
+		int pitch = icon->pitch / (int)sizeof(Uint32);
+		for (int y = 0; y < 32; ++y) {
+			for (int x = 0; x < 32; ++x) pixels[y * pitch + x] = transparent;
+		}
+
+		// Rounded navy tile with a quiet one-pixel edge.
+		for (int y = 2; y <= 29; ++y) {
+			for (int x = 2; x <= 29; ++x) {
+				int cornerX = x < 8 ? 8 - x : (x > 23 ? x - 23 : 0);
+				int cornerY = y < 8 ? 8 - y : (y > 23 ? y - 23 : 0);
+				if (cornerX * cornerX + cornerY * cornerY > 36) continue;
+				bool edge = x == 2 || x == 29 || y == 2 || y == 29 ||
+					cornerX * cornerX + cornerY * cornerY >= 25;
+				pixels[y * pitch + x] = edge ? tileEdge : tile;
+			}
+		}
+
+		// AirPlay screen and upward projector triangle, matching the home mark.
+		for (int y = 8; y <= 17; ++y) {
+			for (int x = 8; x <= 23; ++x) {
+				bool border = x <= 9 || x >= 22 || y <= 9 || y >= 16;
+				if (border) pixels[y * pitch + x] = accent;
+			}
+		}
+		for (int y = 16; y <= 25; ++y) {
+			int halfWidth = (y - 16) * 6 / 9;
+			for (int x = 16 - halfWidth; x <= 16 + halfWidth; ++x) {
+				pixels[y * pitch + x] = accent;
+			}
+		}
+
+		if (SDL_MUSTLOCK(icon)) SDL_UnlockSurface(icon);
+		SDL_SetWindowIcon(window, icon);
+		SDL_FreeSurface(icon);
+	}
+}
 
 // Query the Windows default audio device's sample rate using WASAPI
 // Returns 0 on failure, otherwise the sample rate (e.g., 44100, 48000, 96000)
@@ -82,6 +193,7 @@ CSDLPlayer::CSDLPlayer()
 	: m_window(NULL)
 	, m_renderer(NULL)
 	, m_videoTexture(NULL)
+	, m_videoTextureHasFrame(false)
 	, m_bAudioInited(false)
 	, m_bDumpAudio(false)
 	, m_fileWav(NULL)
@@ -89,6 +201,18 @@ CSDLPlayer::CSDLPlayer()
 	, m_sAudioFmt()
 	, m_displayRect()
 	, m_rotationAngle(0)
+	, m_zoomLevel(MIN_VIDEO_ZOOM)
+	, m_zoomPanX(0.0f)
+	, m_zoomPanY(0.0f)
+	, m_bPanning(false)
+	, m_bLeftButtonDown(false)
+	, m_bPanMoved(false)
+	, m_panStartX(0.0f)
+	, m_panStartY(0.0f)
+	, m_panLastX(0.0f)
+	, m_panLastY(0.0f)
+	, m_leftClickCount(0)
+	, m_zoomResetPending(0)
 	, m_videoWidth(0)
 	, m_videoHeight(0)
 	, m_lastFramePTS(0)
@@ -108,6 +232,7 @@ CSDLPlayer::CSDLPlayer()
 	, m_windowedH(600)
 	, m_lastMouseMoveTime(0)
 	, m_bCursorHidden(false)
+	, m_panCursor(NULL)
 	, m_audioDeviceID(0)
 {
 	ZeroMemory(&m_sAudioFmt, sizeof(SFgAudioFrame));
@@ -115,6 +240,7 @@ CSDLPlayer::CSDLPlayer()
 	ZeroMemory(m_serverName, sizeof(m_serverName));
 	ZeroMemory(m_connectedDeviceName, sizeof(m_connectedDeviceName));
 	m_bConnected = false;
+	m_shuttingDown = 0;
 	m_bDisconnecting = false;
 	m_dwDisconnectStartTime = 0;
 	m_mutexAudio = CreateMutex(NULL, FALSE, NULL);
@@ -149,6 +275,7 @@ CSDLPlayer::CSDLPlayer()
 	m_fpsFrameCount = 0;
 	m_currentFPS = 0.0f;
 	m_totalBytes = 0;
+	m_lastBitrateTotalBytes = 0;
 	m_bitrateStartTime = 0;
 	m_currentBitrateMbps = 0.0f;
 
@@ -190,6 +317,8 @@ CSDLPlayer::CSDLPlayer()
 
 CSDLPlayer::~CSDLPlayer()
 {
+	stopServerForShutdown();
+
 	// Close perf log if still open
 	if (m_filePerfLog != NULL) {
 		fclose(m_filePerfLog);
@@ -222,6 +351,7 @@ bool CSDLPlayer::init()
 		printf("Could not initialize SDL - %s\n", SDL_GetError());
 		return false;
 	}
+	m_panCursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_SIZEALL);
 
 	/* Clean up on exit */
 	atexit(SDL_Quit);
@@ -234,12 +364,16 @@ bool CSDLPlayer::init()
 	SDL_SetYUVConversionMode(SDL_YUV_CONVERSION_JPEG);
 
 	initVideo(m_windowWidth, m_windowHeight);
+	if (m_window == NULL || m_renderer == NULL) {
+		return false;
+	}
 
 	// Get the window handle for show/hide operations
 	SDL_SysWMinfo wmInfo;
 	SDL_VERSION(&wmInfo.version);
 	if (SDL_GetWindowWMInfo(m_window, &wmInfo)) {
 		m_hwnd = wmInfo.info.win.window;
+		ApplyNativeWindowTheme(m_hwnd);
 	}
 
 	// Initialize ImGui with SDL2 backends
@@ -288,9 +422,67 @@ void CSDLPlayer::setServerName(const char* serverName)
 
 void CSDLPlayer::setConnected(bool connected, const char* deviceName)
 {
+	if (InterlockedCompareExchange(&m_shuttingDown, 0, 0) != 0) {
+		return;
+	}
+
+	SConnectionStateChange* change = new (std::nothrow) SConnectionStateChange();
+	if (change == NULL) {
+		printf("Could not allocate connection-state change\n");
+		return;
+	}
+	change->connected = connected;
+	change->hasDeviceName = deviceName != NULL;
+	change->deviceName[0] = '\0';
+	if (deviceName != NULL) {
+		strncpy_s(change->deviceName, sizeof(change->deviceName), deviceName, _TRUNCATE);
+	}
+
+	SDL_Event event = {};
+	event.type = SDL_USEREVENT;
+	event.user.type = SDL_USEREVENT;
+	event.user.code = CONNECTION_STATE_CHANGED_CODE;
+	event.user.data1 = change;
+	event.user.data2 = NULL;
+	if (InterlockedCompareExchange(&m_shuttingDown, 0, 0) != 0) {
+		delete change;
+		return;
+	}
+	if (SDL_PushEvent(&event) <= 0) {
+		printf("Could not queue connection-state change: %s\n", SDL_GetError());
+		delete change;
+	}
+}
+
+void CSDLPlayer::stopServerForShutdown()
+{
+	// Block new callback payloads before stopping their producer, then remove any
+	// payload already queued after the render thread's final event poll.
+	InterlockedExchange(&m_shuttingDown, 1);
+	m_server.stop();
+	if (SDL_WasInit(SDL_INIT_VIDEO) != 0) {
+		SDL_FilterEvents(KeepNonConnectionStateEvents, NULL);
+	}
+}
+
+void CSDLPlayer::applyConnectionState(bool connected, const char* deviceName)
+{
+	if (m_bConnected == connected) {
+		if (connected && deviceName != NULL) {
+			strncpy_s(m_connectedDeviceName, sizeof(m_connectedDeviceName), deviceName, _TRUNCATE);
+		}
+		return;
+	}
+
+	// This method only runs on the SDL thread. Retire every staged and displayed
+	// pixel before changing session ownership so reconnecting at the same source
+	// resolution can never expose the previous sender's final frame.
+	clearSessionVideoFrame();
+
 	if (m_bConnected && !connected) {
 		// Transitioning from connected to disconnected
 		m_bDisconnecting = true;
+		m_bShowPerfGraphs = false;
 		m_dwDisconnectStartTime = GetTickCount();
 
 		// Close perf log on disconnect
@@ -300,14 +492,15 @@ void CSDLPlayer::setConnected(bool connected, const char* deviceName)
 			printf("Performance log saved to airplay_perf.csv\n");
 		}
 
-		// Reset rotation and statistics on disconnect
-		m_rotationAngle = 0;
+		// Reset view and statistics on disconnect
+		InterlockedExchange(&m_zoomResetPending, 1);
 		m_totalFrames = 0;
 		m_droppedFrames = 0;
 		m_fpsStartTime = 0;
 		m_fpsFrameCount = 0;
 		m_currentFPS = 0.0f;
 		m_totalBytes = 0;
+		m_lastBitrateTotalBytes = 0;
 		m_bitrateStartTime = 0;
 		m_currentBitrateMbps = 0.0f;
 		memset(m_perfFps, 0, sizeof(m_perfFps));
@@ -328,6 +521,9 @@ void CSDLPlayer::setConnected(bool connected, const char* deviceName)
 		m_displayFpsStartTime = 0;
 		m_connectionStartTime = 0;
 	} else if (!m_bConnected && connected) {
+		m_bDisconnecting = false;
+		InterlockedExchange(&m_zoomResetPending, 1);
+
 		// Open perf log on connect
 		{
 			char logPath[MAX_PATH] = { 0 };
@@ -354,6 +550,7 @@ void CSDLPlayer::setConnected(bool connected, const char* deviceName)
 		m_fpsFrameCount = 0;
 		m_currentFPS = 0.0f;
 		m_totalBytes = 0;
+		m_lastBitrateTotalBytes = 0;
 		m_bitrateStartTime = 0;
 		m_currentBitrateMbps = 0.0f;
 		memset(m_perfFps, 0, sizeof(m_perfFps));
@@ -378,15 +575,20 @@ void CSDLPlayer::setConnected(bool connected, const char* deviceName)
 	m_bConnected = connected;
 	if (deviceName) {
 		strncpy_s(m_connectedDeviceName, sizeof(m_connectedDeviceName), deviceName, _TRUNCATE);
-	} else {
+	} else if (connected) {
 		m_connectedDeviceName[0] = '\0';
 	}
 }
 
 void CSDLPlayer::unInit()
 {
+	stopServerForShutdown();
 	unInitVideo();
 	unInitAudio();
+	if (m_panCursor != NULL) {
+		SDL_FreeCursor(m_panCursor);
+		m_panCursor = NULL;
+	}
 
 	// Restore default Windows timer resolution
 	timeEndPeriod(1);
@@ -399,7 +601,6 @@ void CSDLPlayer::loopEvents()
 	SDL_Event event;
 
 	BOOL bEndLoop = FALSE;
-	bool bShowUI = m_imgui.IsOverlayVisible();
 
 	EQualityPreset lastQualityPreset = (EQualityPreset)-1;  // Force initial preset application
 
@@ -424,8 +625,9 @@ void CSDLPlayer::loopEvents()
 			// Forward SDL2 events to ImGui first
 			m_imgui.ProcessEvent(&event);
 
-			// Track mouse movement for cursor auto-hide
-			if (event.type == SDL_MOUSEMOTION) {
+			// Track pointer activity for cursor auto-hide.
+			if (event.type == SDL_MOUSEMOTION || event.type == SDL_MOUSEWHEEL ||
+				event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_MOUSEBUTTONUP) {
 				m_lastMouseMoveTime = GetTickCount();
 				if (m_bCursorHidden) {
 					m_bCursorHidden = false;
@@ -433,12 +635,38 @@ void CSDLPlayer::loopEvents()
 				}
 			}
 
-			// Skip application event processing if ImGui wants to capture it
-			if (m_imgui.WantCaptureMouse() && (event.type == SDL_MOUSEMOTION ||
-				event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_MOUSEBUTTONUP)) {
+			// A pan that started outside ImGui must keep receiving motion and its
+			// release even if the captured pointer crosses the overlay.
+			bool activePanMouseEvent = m_bPanning &&
+				(event.type == SDL_MOUSEMOTION ||
+					(event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT));
+
+			// Skip application event processing if ImGui wants to capture it.
+			if (!activePanMouseEvent && m_imgui.WantCaptureMouse() &&
+				(event.type == SDL_MOUSEMOTION || event.type == SDL_MOUSEBUTTONDOWN ||
+					event.type == SDL_MOUSEBUTTONUP || event.type == SDL_MOUSEWHEEL)) {
+				if ((event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_MOUSEBUTTONUP) &&
+					event.button.button == SDL_BUTTON_LEFT) {
+					m_bLeftButtonDown = false;
+					m_bPanMoved = false;
+					m_leftClickCount = 0;
+				}
 				continue;
 			}
-			if (m_imgui.WantCaptureKeyboard() && (event.type == SDL_KEYDOWN || event.type == SDL_KEYUP)) {
+			bool globalShortcut = false;
+			if (event.type == SDL_KEYUP) {
+				SDL_Keycode key = event.key.keysym.sym;
+				bool hasCommandModifier = (event.key.keysym.mod & (KMOD_CTRL | KMOD_ALT | KMOD_GUI)) != 0;
+				if (key == SDLK_F1 && m_bConnected) {
+					globalShortcut = true;
+				} else if (!m_imgui.WantTextInput() && !hasCommandModifier &&
+					(key == SDLK_ESCAPE || key == SDLK_f || key == SDLK_r ||
+						(key == SDLK_h && m_bConnected))) {
+					globalShortcut = true;
+				}
+			}
+			if (!globalShortcut && m_imgui.WantCaptureKeyboard() &&
+				(event.type == SDL_KEYDOWN || event.type == SDL_KEYUP)) {
 				continue;
 			}
 
@@ -449,13 +677,15 @@ void CSDLPlayer::loopEvents()
 					unsigned int height = (unsigned int)(uintptr_t)event.user.data2;
 					if (width != (unsigned int)m_videoWidth || height != (unsigned int)m_videoHeight) {
 						m_bResizing = true;
+						resetZoom();
 
 						{
-							CAutoLock oLock(m_mutexVideo, "recreateTexture");
+							CAutoLock oLock(m_mutexVideo, "updateVideoDimensions");
 							if (m_videoTexture != NULL) {
 								SDL_DestroyTexture(m_videoTexture);
 								m_videoTexture = NULL;
 							}
+							m_videoTextureHasFrame = false;
 							m_videoWidth = width;
 							m_videoHeight = height;
 						}
@@ -496,39 +726,30 @@ void CSDLPlayer::loopEvents()
 							m_yuvReady = 0;
 						}
 
-						// Resize window to match video aspect ratio at 80% of monitor height
+						// Fit on the monitor that currently owns the window while retaining
+						// the user's chosen window center whenever the usable bounds allow it.
 						if (!m_bFullscreen) {
-							SDL_DisplayMode dm;
-							if (SDL_GetDesktopDisplayMode(0, &dm) == 0) {
-								int targetH = (int)(dm.h * 0.80f);
-								int targetW = (int)((long long)targetH * width / height);
-								// Clamp width to 95% of monitor width if too wide
-								int maxW = (int)(dm.w * 0.95f);
-								if (targetW > maxW) {
-									targetW = maxW;
-									targetH = (int)((long long)targetW * height / width);
-								}
-								SDL_SetWindowSize(m_window, targetW, targetH);
-								SDL_SetWindowPosition(m_window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
-								m_windowWidth = targetW;
-								m_windowHeight = targetH;
-								// Save as windowed dimensions for fullscreen restore
-								m_windowedW = targetW;
-								m_windowedH = targetH;
-								SDL_GetWindowPosition(m_window, &m_windowedX, &m_windowedY);
-							}
+							resizeWindowForVideo((int)width, (int)height);
 						}
 
 						// Calculate display rect for the new video
 						calculateDisplayRect();
 
-						// Create IYUV streaming texture (GPU does BT.709 conversion + scaling)
-						m_videoTexture = SDL_CreateTexture(m_renderer,
-							SDL_PIXELFORMAT_IYUV,
-							SDL_TEXTUREACCESS_STREAMING,
-							m_videoWidth, m_videoHeight);
+						// D3D9 can cache a newly bound IYUV texture across the pending
+						// window-resize reset. Initialize all planes before the texture is
+						// ever eligible for drawing, otherwise that cached binding is green.
+						recreateVideoTexture();
 
 						m_bResizing = false;
+					}
+				}
+				else if (event.user.code == CONNECTION_STATE_CHANGED_CODE) {
+					SConnectionStateChange* change =
+						(SConnectionStateChange*)event.user.data1;
+					if (change != NULL) {
+						applyConnectionState(change->connected,
+							change->hasDeviceName ? change->deviceName : NULL);
+						delete change;
 					}
 				}
 				else if (event.user.code == SHOW_WINDOW_CODE) {
@@ -547,51 +768,219 @@ void CSDLPlayer::loopEvents()
 					event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
 					int newW = event.window.data1;
 					int newH = event.window.data2;
-					if (newW >= 100 && newH >= 100 &&
-						(newW != m_windowWidth || newH != m_windowHeight)) {
+					if (newW >= 100 && newH >= 100) {
+						// Renderer scaling can change across resize/DPI transitions. End
+						// the gesture so its next delta cannot mix coordinate spaces.
+						stopPanning();
+						m_bLeftButtonDown = false;
+						m_bPanMoved = false;
+						m_leftClickCount = 0;
 						m_windowWidth = newW;
 						m_windowHeight = newH;
+						// Recalculate even when a programmatic resize pre-populated the
+						// cached size; the renderer output is authoritative only now.
 						calculateDisplayRect();
 					}
 				}
 				else if (event.window.event == SDL_WINDOWEVENT_EXPOSED) {
 					// Window exposed - will be redrawn in the render loop
 				}
+				else if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+					stopPanning();
+					m_bLeftButtonDown = false;
+					m_bPanMoved = false;
+					m_leftClickCount = 0;
+				}
 				break;
 			}
 			case SDL_KEYUP: {
+				bool hasCommandModifier =
+					(event.key.keysym.mod & (KMOD_CTRL | KMOD_ALT | KMOD_GUI)) != 0;
 				switch (event.key.keysym.sym)
 				{
 				case SDLK_ESCAPE: {
 					// ESC exits fullscreen
-					if (m_bFullscreen) {
+					if (!hasCommandModifier && m_bFullscreen) {
 						toggleFullscreen();
 					}
 					break;
 				}
 				case SDLK_f: {
 					// F key also toggles fullscreen
-					toggleFullscreen();
+					if (!hasCommandModifier) {
+						toggleFullscreen();
+					}
 					break;
 				}
 				case SDLK_F1: {
 					// F1 toggles performance graphs overlay
-					m_bShowPerfGraphs = !m_bShowPerfGraphs;
+					if (m_bConnected) {
+						m_bShowPerfGraphs = !m_bShowPerfGraphs;
+					}
+					break;
+				}
+				case SDLK_h: {
+					if (!hasCommandModifier && m_bConnected) {
+						// Diagnostics and controls are mutually exclusive. H returns to
+						// controls from diagnostics, then toggles controls normally.
+						if (m_bShowPerfGraphs) {
+							m_bShowPerfGraphs = false;
+							m_imgui.ShowOverlay();
+						} else {
+							m_imgui.ToggleOverlay();
+						}
+					}
 					break;
 				}
 				case SDLK_r: {
 					// R rotates video 90 degrees clockwise
-					m_rotationAngle = (m_rotationAngle + 90) % 360;
-					calculateDisplayRect();
+					if (!hasCommandModifier) {
+						m_rotationAngle = (m_rotationAngle + 90) % 360;
+						calculateDisplayRect();
+					}
 					break;
 				}
 				}
 				break;
 			}
 			case SDL_MOUSEBUTTONDOWN: {
-				// Double-click toggles fullscreen
-				if (event.button.button == SDL_BUTTON_LEFT && event.button.clicks == 2) {
+				if (event.button.button != SDL_BUTTON_LEFT) {
+					break;
+				}
+
+				float rendererX = 0.0f;
+				float rendererY = 0.0f;
+				windowToRendererCoordinates((float)event.button.x, (float)event.button.y,
+					rendererX, rendererY);
+
+				stopPanning();
+				m_bLeftButtonDown = true;
+				m_bPanMoved = false;
+				m_leftClickCount = event.button.clicks;
+				m_panStartX = rendererX;
+				m_panStartY = rendererY;
+				m_panLastX = rendererX;
+				m_panLastY = rendererY;
+
+				SDL_Rect videoBounds = calculateZoomedVideoBounds();
+				bool overVideo = rendererX >= (float)videoBounds.x &&
+					rendererX < (float)(videoBounds.x + videoBounds.w) &&
+					rendererY >= (float)videoBounds.y &&
+					rendererY < (float)(videoBounds.y + videoBounds.h);
+				if (overVideo && m_bConnected && m_videoTexture != NULL &&
+					m_videoWidth > 0 && m_videoHeight > 0 &&
+					m_zoomLevel > MIN_VIDEO_ZOOM + 0.0001f) {
+					m_bPanning = true;
+					SDL_CaptureMouse(SDL_TRUE);
+					if (m_panCursor != NULL) SDL_SetCursor(m_panCursor);
+				}
+				break;
+			}
+			case SDL_MOUSEMOTION: {
+				if (!m_bLeftButtonDown) {
+					break;
+				}
+
+				float rendererX = 0.0f;
+				float rendererY = 0.0f;
+				windowToRendererCoordinates((float)event.motion.x, (float)event.motion.y,
+					rendererX, rendererY);
+
+				float totalX = rendererX - m_panStartX;
+				float totalY = rendererY - m_panStartY;
+				if (m_bPanning) {
+					if ((event.motion.state & SDL_BUTTON_LMASK) == 0) {
+						stopPanning();
+						m_bLeftButtonDown = false;
+						m_leftClickCount = 0;
+						break;
+					}
+				}
+
+				bool crossedDragThreshold = totalX * totalX + totalY * totalY >=
+					VIDEO_PAN_DRAG_THRESHOLD * VIDEO_PAN_DRAG_THRESHOLD;
+				if (!m_bPanMoved && crossedDragThreshold) {
+					m_bPanMoved = true;
+					if (m_bPanning) {
+						// Apply the full displacement once the gesture is intentional,
+						// avoiding click jitter without losing the first drag pixels.
+						applyDragPan(totalX, totalY);
+						m_panLastX = rendererX;
+						m_panLastY = rendererY;
+					}
+				} else if (m_bPanning && m_bPanMoved) {
+					float deltaX = rendererX - m_panLastX;
+					float deltaY = rendererY - m_panLastY;
+					m_panLastX = rendererX;
+					m_panLastY = rendererY;
+					applyDragPan(deltaX, deltaY);
+				}
+				break;
+			}
+			case SDL_MOUSEBUTTONUP: {
+				if (event.button.button != SDL_BUTTON_LEFT) {
+					break;
+				}
+
+				if (m_bLeftButtonDown) {
+					float rendererX = 0.0f;
+					float rendererY = 0.0f;
+					windowToRendererCoordinates((float)event.button.x, (float)event.button.y,
+						rendererX, rendererY);
+					float totalX = rendererX - m_panStartX;
+					float totalY = rendererY - m_panStartY;
+					if (totalX * totalX + totalY * totalY >=
+						VIDEO_PAN_DRAG_THRESHOLD * VIDEO_PAN_DRAG_THRESHOLD) {
+						m_bPanMoved = true;
+					}
+				}
+
+				bool toggleOnDoubleClick = m_bLeftButtonDown &&
+					m_leftClickCount == 2 && !m_bPanMoved;
+				stopPanning();
+				m_bLeftButtonDown = false;
+				m_bPanMoved = false;
+				m_leftClickCount = 0;
+
+				if (toggleOnDoubleClick) {
 					toggleFullscreen();
+				}
+				break;
+			}
+			case SDL_RENDER_TARGETS_RESET: {
+				// D3D9 reports this after a resize reset. Re-upload the latest CPU
+				// frame so all three YUV planes and the cached draw state are current.
+				if (m_videoTexture != NULL && m_videoTextureHasFrame) {
+					m_videoTextureHasFrame = false;
+					InterlockedExchange(&m_yuvReady, 1);
+				}
+				break;
+			}
+			case SDL_RENDER_DEVICE_RESET: {
+				// A full renderer reset invalidates both video and ImGui font textures.
+				// Retire backend resources in their owning ImGui context before retrying.
+				m_imgui.RecreateRendererDeviceObjects();
+				m_videoTextureHasFrame = false;
+				recreateVideoTexture();
+				break;
+			}
+			case SDL_MOUSEWHEEL: {
+				if (m_bConnected && m_videoTexture != NULL && m_videoWidth > 0 && m_videoHeight > 0) {
+					float wheelDelta = event.wheel.preciseY;
+					if (wheelDelta == 0.0f) {
+						wheelDelta = (float)event.wheel.y;
+					}
+					if (event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED) {
+						wheelDelta = -wheelDelta;
+					}
+
+					// Keep pointer anchoring correct when window and renderer pixels differ.
+					float mouseX = 0.0f;
+					float mouseY = 0.0f;
+					windowToRendererCoordinates((float)event.wheel.mouseX,
+						(float)event.wheel.mouseY, mouseX, mouseY);
+
+					applyWheelZoom(wheelDelta, mouseX, mouseY);
 				}
 				break;
 			}
@@ -611,19 +1000,29 @@ void CSDLPlayer::loopEvents()
 					m_imgui.SaveSettings(settingsPath);
 				}
 
-				// Stop server first before exiting the event loop
-				m_server.stop();
-				SDL_Delay(100);
+				// Stop callback producers and release any queued payloads before SDL exits.
+				stopServerForShutdown();
 				bEndLoop = TRUE;
 				break;
 			}
 			}
 		} // End of event polling loop
+		if (bEndLoop) {
+			break;
+		}
+
+		// Connection callbacks run off the SDL thread. Apply their requested view
+		// reset here so renderer geometry is only touched by the render thread.
+		if (InterlockedExchange(&m_zoomResetPending, 0) == 1) {
+			m_rotationAngle = 0;
+			resetZoom();
+			calculateDisplayRect();
+		}
 
 		// Handle disconnect transition (show black screen briefly)
 		if (m_bDisconnecting) {
 			DWORD elapsed = GetTickCount() - m_dwDisconnectStartTime;
-			if (elapsed >= 300) {
+			if (elapsed >= DISCONNECT_NOTICE_MS) {
 				m_bDisconnecting = false;
 			}
 		}
@@ -668,11 +1067,7 @@ void CSDLPlayer::loopEvents()
 			}
 			// Recreate texture with new filter mode (hint only applies at texture creation)
 			if (m_videoTexture != NULL && m_videoWidth > 0 && m_videoHeight > 0) {
-				SDL_DestroyTexture(m_videoTexture);
-				m_videoTexture = SDL_CreateTexture(m_renderer,
-					SDL_PIXELFORMAT_IYUV,
-					SDL_TEXTUREACCESS_STREAMING,
-					m_videoWidth, m_videoHeight);
+				recreateVideoTexture();
 			}
 		}
 
@@ -681,6 +1076,15 @@ void CSDLPlayer::loopEvents()
 		// 1. Clear renderer to black
 		SDL_SetRenderDrawColor(m_renderer, 0, 0, 0, 255);
 		SDL_RenderClear(m_renderer);
+
+		// A device reset can make creation fail transiently. Flush the queued clear
+		// so SDL activates/resets the renderer before retrying texture creation.
+		if (m_videoTexture == NULL && m_videoWidth > 0 && m_videoHeight > 0) {
+			if (SDL_RenderFlush(m_renderer) != 0) {
+				printf("SDL_RenderFlush failed while recovering texture: %s\n", SDL_GetError());
+			}
+			recreateVideoTexture();
+		}
 
 		// 2. Upload new YUV frame with FIXED-INTERVAL PACING
 		// Instead of uploading immediately (which mirrors bursty TCP delivery),
@@ -695,65 +1099,102 @@ void CSDLPlayer::loopEvents()
 				: m_targetFrameIntervalMs;  // First frame: always display immediately
 
 			// 90% tolerance to avoid missing frames due to timing jitter
-			bool intervalReady = (msSinceLastNew >= m_targetFrameIntervalMs * 0.90);
+			bool intervalReady = !m_videoTextureHasFrame ||
+				(msSinceLastNew >= m_targetFrameIntervalMs * 0.90);
 
-			if (intervalReady && InterlockedCompareExchange(&m_yuvReady, 0, 1) == 1) {
+			if (intervalReady && InterlockedCompareExchange(&m_yuvReady, 0, 0) == 1) {
+				CAutoLock oLock(m_mutexVideo, "uploadVideoTexture");
 				LONG readIdx = InterlockedCompareExchange(&m_yuvReadIdx, 0, 0);
-				if (readIdx >= 0 && readIdx <= 1 &&
-					m_yuvBuffer[readIdx][0] != NULL && m_videoTexture != NULL) {
+				if (readIdx >= 0 && readIdx <= 1 && m_videoTexture != NULL &&
+					m_yuvBuffer[readIdx][0] != NULL &&
+					m_yuvBuffer[readIdx][1] != NULL &&
+					m_yuvBuffer[readIdx][2] != NULL) {
 
 					// Capture frame arrival timestamp before upload
 					frameArrivalQpc = InterlockedCompareExchange64(&m_qpcFrameArrival, 0, 0);
 
 					// Upload raw YUV planes to GPU (GPU shader does colorspace conversion + scaling)
-					SDL_UpdateYUVTexture(m_videoTexture, NULL,
+					int updateResult = SDL_UpdateYUVTexture(m_videoTexture, NULL,
 						m_yuvBuffer[readIdx][0], m_yuvPitch[0],
 						m_yuvBuffer[readIdx][1], m_yuvPitch[1],
 						m_yuvBuffer[readIdx][2], m_yuvPitch[2]);
-					m_lastFrameTime = GetTickCount();
+					if (updateResult != 0) {
+						printf("SDL_UpdateYUVTexture failed: %s\n", SDL_GetError());
+						// Keep m_yuvReady set so this frame is retried next iteration.
+						frameArrivalQpc = 0;
+					} else {
+						m_videoTextureHasFrame = true;
+						InterlockedExchange(&m_yuvReady, 0);
+						m_lastFrameTime = GetTickCount();
 
-					// Record when this new frame was displayed (for pacing)
-					QueryPerformanceCounter(&m_qpcLastNewFrame);
+						// Record when this new frame was displayed (for pacing)
+						QueryPerformanceCounter(&m_qpcLastNewFrame);
 
-					// Track display FPS (actual frames uploaded to GPU per second)
-					m_displayFrameCount++;
-					DWORD displayNow = SDL_GetTicks();
-					if (m_displayFpsStartTime == 0) {
-						m_displayFpsStartTime = displayNow;
-					} else if (displayNow - m_displayFpsStartTime >= 1000) {
-						m_displayFPS = (float)m_displayFrameCount * 1000.0f / (float)(displayNow - m_displayFpsStartTime);
-						m_displayFrameCount = 0;
-						m_displayFpsStartTime = displayNow;
+						// Track display FPS (actual frames uploaded to GPU per second)
+						m_displayFrameCount++;
+						DWORD displayNow = SDL_GetTicks();
+						if (m_displayFpsStartTime == 0) {
+							m_displayFpsStartTime = displayNow;
+						} else if (displayNow - m_displayFpsStartTime >= 1000) {
+							m_displayFPS = (float)m_displayFrameCount * 1000.0f / (float)(displayNow - m_displayFpsStartTime);
+							m_displayFrameCount = 0;
+							m_displayFpsStartTime = displayNow;
+						}
 					}
 				}
 			}
 		}
 
 		// 3. Render video texture (GPU handles scaling)
-		// Only render when connected or during disconnect transition (prevents stale frame behind home screen)
-		if (m_videoTexture != NULL && m_videoWidth > 0 && (m_bConnected || m_bDisconnecting)) {
-			SDL_RenderCopyEx(m_renderer, m_videoTexture, NULL, &m_displayRect,
-				(double)m_rotationAngle, NULL, SDL_FLIP_NONE);
+		// Disconnect notices render over a clean background, never a stale cast frame.
+		if (m_videoTexture != NULL && m_videoTextureHasFrame && m_videoWidth > 0 &&
+			m_bConnected) {
+			if (SDL_RenderCopyEx(m_renderer, m_videoTexture, NULL, &m_displayRect,
+				(double)m_rotationAngle, NULL, SDL_FLIP_NONE) != 0) {
+				printf("SDL_RenderCopyEx failed: %s\n", SDL_GetError());
+				m_videoTextureHasFrame = false;
+				InterlockedExchange(&m_yuvReady, 1);
+			}
 		}
 
 		// 4. Render ImGui overlay on top
 		m_imgui.NewFrame();
 		if (m_bConnected) {
-			// Connected - show overlay with controls and video statistics
-			m_imgui.RenderOverlay(&bShowUI, m_serverName, m_bConnected, m_connectedDeviceName,
-				m_videoWidth, m_videoHeight, m_displayFPS, m_currentBitrateMbps,
-				m_totalFrames, m_droppedFrames, m_totalBytes);
-			m_imgui.SetOverlayVisible(bShowUI);  // Sync for settings persistence
+			// Controls and diagnostics are mutually exclusive so the cast remains visible.
+			if (!m_bShowPerfGraphs) {
+				bool resetView = false;
+				bool rotateView = false;
+				m_imgui.RenderOverlay(m_serverName, m_bConnected, m_connectedDeviceName,
+					m_videoWidth, m_videoHeight, m_displayFPS, m_currentBitrateMbps,
+					m_totalFrames, m_droppedFrames, m_zoomLevel, m_rotationAngle,
+					&resetView, &rotateView);
+				if (rotateView) {
+					m_rotationAngle = (m_rotationAngle + 90) % 360;
+					calculateDisplayRect();
+				}
+				if (resetView) {
+					m_rotationAngle = 0;
+					resetZoom();
+					calculateDisplayRect();
+				}
+			}
 		} else if (m_bDisconnecting) {
 			// Disconnecting - show disconnect message
-			m_imgui.RenderDisconnectMessage(m_connectedDeviceName);
+			DWORD elapsed = GetTickCount() - m_dwDisconnectStartTime;
+			float visibility = 1.0f;
+			if (elapsed < DISCONNECT_FADE_IN_MS) {
+				visibility = (float)elapsed / (float)DISCONNECT_FADE_IN_MS;
+			} else if (elapsed > DISCONNECT_NOTICE_MS - DISCONNECT_FADE_OUT_MS) {
+				visibility = (float)(DISCONNECT_NOTICE_MS - elapsed) / (float)DISCONNECT_FADE_OUT_MS;
+			}
+			m_imgui.RenderDisconnectMessage(m_connectedDeviceName, ClampFloat(visibility, 0.0f, 1.0f));
 		} else {
 			// Disconnected - show home screen
-			m_imgui.RenderHomeScreen(m_serverName, m_bConnected, m_connectedDeviceName, m_server.isRunning());
+			m_imgui.RenderHomeScreen(m_serverName, m_server.isRunning());
 		}
 
 		// 4b. Render performance graphs if F1 toggled on
-		if (m_bShowPerfGraphs) {
+		if (m_bShowPerfGraphs && m_bConnected) {
 			float liveFrameTime = (m_perfAccumCount > 0) ? m_perfAccumFrameTime / (float)m_perfAccumCount : 0.0f;
 			float liveLatency = (m_perfAccumCount > 0) ? m_perfAccumLatency / (float)m_perfAccumCount : 0.0f;
 
@@ -788,7 +1229,7 @@ void CSDLPlayer::loopEvents()
 			perf.audioQueueSize = audioQueueNow;
 			perf.connectionTimeSec = (m_connectionStartTime > 0) ? (float)(GetTickCount() - m_connectionStartTime) / 1000.0f : 0.0f;
 
-			m_imgui.RenderPerfGraphs(perf);
+			m_imgui.RenderPerfGraphs(perf, &m_bShowPerfGraphs);
 		}
 
 		// ImGui::Render() + GPU draw via SDL2Renderer backend
@@ -885,13 +1326,23 @@ void CSDLPlayer::loopEvents()
 			}
 		}
 
-		// Auto-hide cursor after 5 seconds of inactivity
-		if (!m_bCursorHidden && m_lastMouseMoveTime > 0) {
-			DWORD elapsed = GetTickCount() - m_lastMouseMoveTime;
-			if (elapsed >= CURSOR_HIDE_DELAY_MS) {
-				m_bCursorHidden = true;
-				SDL_ShowCursor(SDL_DISABLE);
-			}
+		// Keep the pointer visible anywhere controls are usable. During an
+		// unobstructed cast, enforce hidden state every frame because the ImGui
+		// SDL backend may restore the OS cursor while starting a new frame.
+		bool allowCursorHide = m_bConnected &&
+			m_imgui.GetOverlayState() == OVERLAY_HIDDEN && !m_bShowPerfGraphs &&
+			!m_bPanning && !m_imgui.WantCaptureMouse();
+		DWORD cursorIdleMs = m_lastMouseMoveTime > 0
+			? GetTickCount() - m_lastMouseMoveTime : 0;
+		if (allowCursorHide && cursorIdleMs >= CURSOR_HIDE_DELAY_MS) {
+			m_bCursorHidden = true;
+			SDL_ShowCursor(SDL_DISABLE);
+		} else if (!allowCursorHide && m_bCursorHidden) {
+			m_bCursorHidden = false;
+			SDL_ShowCursor(SDL_ENABLE);
+		}
+		if (m_bPanning && m_panCursor != NULL) {
+			SDL_SetCursor(m_panCursor);
 		}
 
 		// Sync audio settings between player and UI
@@ -967,7 +1418,10 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 		}
 
 		LONG writeIdx = InterlockedCompareExchange(&m_yuvWriteIdx, 0, 0);
-		if (writeIdx < 0 || writeIdx > 1 || m_yuvBuffer[writeIdx][0] == NULL) {
+		if (writeIdx < 0 || writeIdx > 1 ||
+			m_yuvBuffer[writeIdx][0] == NULL ||
+			m_yuvBuffer[writeIdx][1] == NULL ||
+			m_yuvBuffer[writeIdx][2] == NULL) {
 			return;  // Buffers not allocated yet
 		}
 
@@ -1049,11 +1503,13 @@ void CSDLPlayer::outputVideo(SFgVideoFrame* data)
 	}
 
 	// Update bitrate every second
-	static unsigned long long lastTotalBytes = 0;
-	if (currentTime - m_bitrateStartTime >= 1000) {
-		unsigned long long bytesDelta = m_totalBytes - lastTotalBytes;
-		m_currentBitrateMbps = (float)(bytesDelta * 8) / (1000.0f * 1000.0f);
-		lastTotalBytes = m_totalBytes;
+	DWORD bitrateElapsedMs = currentTime - m_bitrateStartTime;
+	if (bitrateElapsedMs >= 1000) {
+		unsigned long long bytesDelta = m_totalBytes >= m_lastBitrateTotalBytes
+			? m_totalBytes - m_lastBitrateTotalBytes : m_totalBytes;
+		m_currentBitrateMbps = (float)((double)bytesDelta * 8.0 /
+			((double)bitrateElapsedMs * 1000.0));
+		m_lastBitrateTotalBytes = m_totalBytes;
 		m_bitrateStartTime = currentTime;
 	}
 }
@@ -1154,7 +1610,7 @@ void CSDLPlayer::initVideo(int width, int height)
 	m_windowHeight = height;
 
 	// Create SDL2 window with resizable support and HiDPI awareness
-	m_window = SDL_CreateWindow("AirPlay Server",
+	m_window = SDL_CreateWindow("AirPlay Receiver",
 		SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
 		width, height,
 		SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
@@ -1163,6 +1619,8 @@ void CSDLPlayer::initVideo(int width, int height)
 		printf("Could not create window: %s\n", SDL_GetError());
 		return;
 	}
+	ApplyWindowIcon(m_window);
+	SDL_SetWindowMinimumSize(m_window, MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT);
 
 	// Create GPU-accelerated renderer (no VSync - minimizes frame latency)
 	m_renderer = SDL_CreateRenderer(m_window, -1,
@@ -1178,6 +1636,99 @@ void CSDLPlayer::initVideo(int width, int height)
 
 	// Calculate display rect (will be 0x0 until video arrives)
 	calculateDisplayRect();
+}
+
+void CSDLPlayer::resizeWindowForVideo(int width, int height)
+{
+	if (m_window == NULL || width <= 0 || height <= 0) {
+		return;
+	}
+
+	int displayIndex = SDL_GetWindowDisplayIndex(m_window);
+	SDL_Rect usableBounds = {};
+	bool haveBounds = displayIndex >= 0 &&
+		SDL_GetDisplayUsableBounds(displayIndex, &usableBounds) == 0;
+	if (!haveBounds && displayIndex >= 0) {
+		haveBounds = SDL_GetDisplayBounds(displayIndex, &usableBounds) == 0;
+	}
+	if (!haveBounds || usableBounds.w <= 0 || usableBounds.h <= 0) {
+		printf("Could not get usable bounds for window display: %s\n", SDL_GetError());
+		return;
+	}
+
+	int borderTop = 0;
+	int borderLeft = 0;
+	int borderBottom = 0;
+	int borderRight = 0;
+	SDL_GetWindowBordersSize(m_window, &borderTop, &borderLeft,
+		&borderBottom, &borderRight);
+	int borderWidth = borderLeft + borderRight;
+	int borderHeight = borderTop + borderBottom;
+
+	int maxWidth = (int)((long long)usableBounds.w * 95 / 100) - borderWidth;
+	int maxHeight = (int)((long long)usableBounds.h * 80 / 100) - borderHeight;
+	if (maxWidth < 1) maxWidth = 1;
+	if (maxHeight < 1) maxHeight = 1;
+
+	int targetWidth = maxWidth;
+	int targetHeight = (int)((long long)targetWidth * height / width);
+	if (targetHeight > maxHeight) {
+		targetHeight = maxHeight;
+		targetWidth = (int)((long long)targetHeight * width / height);
+	}
+
+	int maximumClientWidth = usableBounds.w - borderWidth;
+	int maximumClientHeight = usableBounds.h - borderHeight;
+	if (maximumClientWidth < 1) maximumClientWidth = 1;
+	if (maximumClientHeight < 1) maximumClientHeight = 1;
+	int minimumWidth = MIN_WINDOW_WIDTH < maximumClientWidth
+		? MIN_WINDOW_WIDTH : maximumClientWidth;
+	int minimumHeight = MIN_WINDOW_HEIGHT < maximumClientHeight
+		? MIN_WINDOW_HEIGHT : maximumClientHeight;
+	if (targetWidth < minimumWidth) targetWidth = minimumWidth;
+	if (targetHeight < minimumHeight) targetHeight = minimumHeight;
+	if (targetWidth > maximumClientWidth) targetWidth = maximumClientWidth;
+	if (targetHeight > maximumClientHeight) targetHeight = maximumClientHeight;
+
+	int oldX = 0;
+	int oldY = 0;
+	int oldWidth = 0;
+	int oldHeight = 0;
+	SDL_GetWindowPosition(m_window, &oldX, &oldY);
+	SDL_GetWindowSize(m_window, &oldWidth, &oldHeight);
+	long long centerXTwice = ((long long)oldX - borderLeft) * 2 +
+		oldWidth + borderWidth;
+	long long centerYTwice = ((long long)oldY - borderTop) * 2 +
+		oldHeight + borderHeight;
+
+	SDL_SetWindowSize(m_window, targetWidth, targetHeight);
+
+	// SDL applies minimum-size and DPI constraints synchronously. Cache the
+	// resulting client size, not the requested size, so fullscreen restore and
+	// renderer geometry cannot diverge from the native window.
+	SDL_GetWindowSize(m_window, &targetWidth, &targetHeight);
+	SDL_GetWindowBordersSize(m_window, &borderTop, &borderLeft,
+		&borderBottom, &borderRight);
+	int outerWidth = targetWidth + borderLeft + borderRight;
+	int outerHeight = targetHeight + borderTop + borderBottom;
+	int targetOuterX = (int)((centerXTwice - outerWidth) / 2);
+	int targetOuterY = (int)((centerYTwice - outerHeight) / 2);
+	int maximumOuterX = usableBounds.x + usableBounds.w - outerWidth;
+	int maximumOuterY = usableBounds.y + usableBounds.h - outerHeight;
+	if (maximumOuterX < usableBounds.x) maximumOuterX = usableBounds.x;
+	if (maximumOuterY < usableBounds.y) maximumOuterY = usableBounds.y;
+	if (targetOuterX < usableBounds.x) targetOuterX = usableBounds.x;
+	if (targetOuterX > maximumOuterX) targetOuterX = maximumOuterX;
+	if (targetOuterY < usableBounds.y) targetOuterY = usableBounds.y;
+	if (targetOuterY > maximumOuterY) targetOuterY = maximumOuterY;
+	SDL_SetWindowPosition(m_window, targetOuterX + borderLeft,
+		targetOuterY + borderTop);
+
+	m_windowWidth = targetWidth;
+	m_windowHeight = targetHeight;
+	m_windowedW = targetWidth;
+	m_windowedH = targetHeight;
+	SDL_GetWindowPosition(m_window, &m_windowedX, &m_windowedY);
 }
 
 void CSDLPlayer::resizeWindow(int width, int height)
@@ -1213,6 +1764,11 @@ void CSDLPlayer::handleLiveResize(int width, int height)
 
 void CSDLPlayer::toggleFullscreen()
 {
+	stopPanning();
+	m_bLeftButtonDown = false;
+	m_bPanMoved = false;
+	m_leftClickCount = 0;
+
 	if (m_window == NULL) {
 		return;
 	}
@@ -1232,7 +1788,12 @@ void CSDLPlayer::toggleFullscreen()
 		SDL_GetWindowSize(m_window, &m_windowedW, &m_windowedH);
 
 		// Enter borderless fullscreen (SDL2 handles everything)
-		SDL_SetWindowFullscreen(m_window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+		if (SDL_SetWindowFullscreen(m_window, SDL_WINDOW_FULLSCREEN_DESKTOP) != 0) {
+			printf("Could not enter fullscreen: %s\n", SDL_GetError());
+			SetCursorPos(cursorPos.x, cursorPos.y);
+			m_bResizing = false;
+			return;
+		}
 
 		// Update window dimensions
 		SDL_GetWindowSize(m_window, &m_windowWidth, &m_windowHeight);
@@ -1244,14 +1805,21 @@ void CSDLPlayer::toggleFullscreen()
 	}
 	else {
 		// Exit fullscreen
-		SDL_SetWindowFullscreen(m_window, 0);
+		if (SDL_SetWindowFullscreen(m_window, 0) != 0) {
+			printf("Could not exit fullscreen: %s\n", SDL_GetError());
+			SetCursorPos(cursorPos.x, cursorPos.y);
+			m_bResizing = false;
+			return;
+		}
 
 		// Restore window position and size
 		SDL_SetWindowPosition(m_window, m_windowedX, m_windowedY);
 		SDL_SetWindowSize(m_window, m_windowedW, m_windowedH);
 
-		m_windowWidth = m_windowedW;
-		m_windowHeight = m_windowedH;
+		SDL_GetWindowSize(m_window, &m_windowWidth, &m_windowHeight);
+		m_windowedW = m_windowWidth;
+		m_windowedH = m_windowHeight;
+		SDL_GetWindowPosition(m_window, &m_windowedX, &m_windowedY);
 
 		// Recalculate display rect for windowed mode
 		calculateDisplayRect();
@@ -1265,15 +1833,25 @@ void CSDLPlayer::toggleFullscreen()
 	m_bResizing = false;
 }
 
-void CSDLPlayer::calculateDisplayRect()
+SDL_Rect CSDLPlayer::calculateFittedVideoBounds() const
 {
+	SDL_Rect bounds = {};
+	int renderWidth = m_windowWidth;
+	int renderHeight = m_windowHeight;
+	if (m_renderer != NULL) {
+		int outputWidth = 0;
+		int outputHeight = 0;
+		if (SDL_GetRendererOutputSize(m_renderer, &outputWidth, &outputHeight) == 0 &&
+			outputWidth > 0 && outputHeight > 0) {
+			renderWidth = outputWidth;
+			renderHeight = outputHeight;
+		}
+	}
+
 	if (m_videoWidth <= 0 || m_videoHeight <= 0) {
-		// No video yet, fill the entire window
-		m_displayRect.x = 0;
-		m_displayRect.y = 0;
-		m_displayRect.w = m_windowWidth;
-		m_displayRect.h = m_windowHeight;
-		return;
+		bounds.w = renderWidth;
+		bounds.h = renderHeight;
+		return bounds;
 	}
 
 	// For 90/270 rotation, the effective video dimensions are swapped
@@ -1282,47 +1860,257 @@ void CSDLPlayer::calculateDisplayRect()
 	int effectiveH = rotated ? m_videoWidth : m_videoHeight;
 
 	// Use cross-multiplication to compare aspect ratios without float rounding
-	long long videoCross = (long long)effectiveW * m_windowHeight;
-	long long windowCross = (long long)m_windowWidth * effectiveH;
+	long long videoCross = (long long)effectiveW * renderHeight;
+	long long windowCross = (long long)renderWidth * effectiveH;
 
 	// If the aspect ratios are very close (within 1%), just fill the entire window
 	long long diff = videoCross - windowCross;
 	if (diff < 0) diff = -diff;
 	long long threshold = windowCross / 100;
 	if (diff <= threshold) {
-		m_displayRect.x = 0;
-		m_displayRect.y = 0;
-		m_displayRect.w = m_windowWidth;
-		m_displayRect.h = m_windowHeight;
-		return;
+		bounds.w = renderWidth;
+		bounds.h = renderHeight;
+		return bounds;
 	}
 
 	int displayWidth, displayHeight;
 
 	if (videoCross > windowCross) {
 		// Video is wider than window - fit to width (letterbox top/bottom)
-		displayWidth = m_windowWidth;
-		displayHeight = (int)(((long long)m_windowWidth * effectiveH + effectiveW / 2) / effectiveW);
+		displayWidth = renderWidth;
+		displayHeight = (int)(((long long)renderWidth * effectiveH + effectiveW / 2) / effectiveW);
 	} else {
 		// Video is taller than window - fit to height (pillarbox left/right)
-		displayHeight = m_windowHeight;
-		displayWidth = (int)(((long long)m_windowHeight * effectiveW + effectiveH / 2) / effectiveH);
+		displayHeight = renderHeight;
+		displayWidth = (int)(((long long)renderHeight * effectiveW + effectiveH / 2) / effectiveH);
 	}
 
-	// Center the display rect
-	// SDL_RenderCopyEx rotates around the center of the dest rect, so the rect
-	// must be sized for the *rotated* output but SDL needs the *unrotated* rect.
-	// For 90/270, we need to swap the rect dimensions so the rotated result fits.
-	if (rotated) {
-		m_displayRect.x = (m_windowWidth - displayHeight) / 2;
-		m_displayRect.y = (m_windowHeight - displayWidth) / 2;
-		m_displayRect.w = displayHeight;
-		m_displayRect.h = displayWidth;
-	} else {
-		m_displayRect.x = (m_windowWidth - displayWidth) / 2;
-		m_displayRect.y = (m_windowHeight - displayHeight) / 2;
-		m_displayRect.w = displayWidth;
-		m_displayRect.h = displayHeight;
+	bounds.x = (renderWidth - displayWidth) / 2;
+	bounds.y = (renderHeight - displayHeight) / 2;
+	bounds.w = displayWidth;
+	bounds.h = displayHeight;
+	return bounds;
+}
+
+SDL_Rect CSDLPlayer::calculateZoomedVideoBounds() const
+{
+	SDL_Rect fitted = calculateFittedVideoBounds();
+	if (m_videoWidth <= 0 || m_videoHeight <= 0) {
+		return fitted;
+	}
+
+	float zoom = ClampFloat(m_zoomLevel, MIN_VIDEO_ZOOM, MAX_VIDEO_ZOOM);
+	int zoomedWidth = (int)lroundf((float)fitted.w * zoom);
+	int zoomedHeight = (int)lroundf((float)fitted.h * zoom);
+	if (zoomedWidth < 1) zoomedWidth = 1;
+	if (zoomedHeight < 1) zoomedHeight = 1;
+
+	float extraWidth = (float)(zoomedWidth - fitted.w);
+	float extraHeight = (float)(zoomedHeight - fitted.h);
+	float centerX = (float)fitted.x + (float)fitted.w * 0.5f +
+		ClampFloat(m_zoomPanX, -1.0f, 1.0f) * extraWidth * 0.5f;
+	float centerY = (float)fitted.y + (float)fitted.h * 0.5f +
+		ClampFloat(m_zoomPanY, -1.0f, 1.0f) * extraHeight * 0.5f;
+
+	SDL_Rect zoomed = {};
+	zoomed.x = (int)lroundf(centerX - (float)zoomedWidth * 0.5f);
+	zoomed.y = (int)lroundf(centerY - (float)zoomedHeight * 0.5f);
+	zoomed.w = zoomedWidth;
+	zoomed.h = zoomedHeight;
+	return zoomed;
+}
+
+void CSDLPlayer::calculateDisplayRect()
+{
+	SDL_Rect visibleBounds = calculateZoomedVideoBounds();
+	bool rotated = (m_rotationAngle == 90 || m_rotationAngle == 270);
+
+	// SDL_RenderCopyEx rotates around the destination center. For quarter-turns,
+	// convert the desired visible bounds back to the pre-rotation destination.
+	m_displayRect.w = rotated ? visibleBounds.h : visibleBounds.w;
+	m_displayRect.h = rotated ? visibleBounds.w : visibleBounds.h;
+	m_displayRect.x = visibleBounds.x + (visibleBounds.w - m_displayRect.w) / 2;
+	m_displayRect.y = visibleBounds.y + (visibleBounds.h - m_displayRect.h) / 2;
+}
+
+bool CSDLPlayer::recreateVideoTexture()
+{
+	if (m_renderer == NULL || m_videoWidth <= 0 || m_videoHeight <= 0) {
+		return false;
+	}
+
+	CAutoLock oLock(m_mutexVideo, "recreateVideoTexture");
+
+	if (m_videoTexture != NULL) {
+		SDL_DestroyTexture(m_videoTexture);
+		m_videoTexture = NULL;
+	}
+	m_videoTextureHasFrame = false;
+
+	m_videoTexture = SDL_CreateTexture(m_renderer,
+		SDL_PIXELFORMAT_IYUV,
+		SDL_TEXTUREACCESS_STREAMING,
+		m_videoWidth, m_videoHeight);
+	if (m_videoTexture == NULL) {
+		printf("SDL_CreateTexture failed: %s\n", SDL_GetError());
+		return false;
+	}
+
+	LONG readIdx = InterlockedCompareExchange(&m_yuvReadIdx, 0, 0);
+	if (readIdx < 0 || readIdx > 1 ||
+		m_yuvBuffer[readIdx][0] == NULL ||
+		m_yuvBuffer[readIdx][1] == NULL ||
+		m_yuvBuffer[readIdx][2] == NULL) {
+		return false;
+	}
+
+	if (SDL_UpdateYUVTexture(m_videoTexture, NULL,
+		m_yuvBuffer[readIdx][0], m_yuvPitch[0],
+		m_yuvBuffer[readIdx][1], m_yuvPitch[1],
+		m_yuvBuffer[readIdx][2], m_yuvPitch[2]) != 0) {
+		printf("Initial SDL_UpdateYUVTexture failed: %s\n", SDL_GetError());
+		InterlockedExchange(&m_yuvReady, 1);
+		return false;
+	}
+
+	// The texture now has staging data before its first RenderCopy. This is the
+	// invariant required for SDL's D3D9 resize reset to restore Y/U/V correctly.
+	m_videoTextureHasFrame = true;
+	InterlockedExchange(&m_yuvReady, 0);
+	return true;
+}
+
+void CSDLPlayer::windowToRendererCoordinates(float windowX, float windowY,
+	float& rendererX, float& rendererY) const
+{
+	rendererX = windowX;
+	rendererY = windowY;
+	if (m_window == NULL || m_renderer == NULL) {
+		return;
+	}
+
+	int windowW = 0;
+	int windowH = 0;
+	int renderW = 0;
+	int renderH = 0;
+	SDL_GetWindowSize(m_window, &windowW, &windowH);
+	if (SDL_GetRendererOutputSize(m_renderer, &renderW, &renderH) == 0 &&
+		windowW > 0 && windowH > 0 && renderW > 0 && renderH > 0) {
+		rendererX *= (float)renderW / (float)windowW;
+		rendererY *= (float)renderH / (float)windowH;
+	}
+}
+
+void CSDLPlayer::applyWheelZoom(float wheelDelta, float mouseX, float mouseY)
+{
+	if (wheelDelta == 0.0f || m_videoWidth <= 0 || m_videoHeight <= 0) {
+		return;
+	}
+
+	float oldZoom = ClampFloat(m_zoomLevel, MIN_VIDEO_ZOOM, MAX_VIDEO_ZOOM);
+	float newZoom = ClampFloat(oldZoom * powf(VIDEO_ZOOM_STEP, wheelDelta),
+		MIN_VIDEO_ZOOM, MAX_VIDEO_ZOOM);
+	if (fabsf(newZoom - oldZoom) < 0.0001f) {
+		return;
+	}
+
+	SDL_Rect fitted = calculateFittedVideoBounds();
+	SDL_Rect current = calculateZoomedVideoBounds();
+	float anchorX = ClampFloat(mouseX, (float)current.x, (float)(current.x + current.w));
+	float anchorY = ClampFloat(mouseY, (float)current.y, (float)(current.y + current.h));
+	float relativeX = current.w > 0 ? (anchorX - (float)current.x) / (float)current.w : 0.5f;
+	float relativeY = current.h > 0 ? (anchorY - (float)current.y) / (float)current.h : 0.5f;
+
+	int targetWidth = (int)lroundf((float)fitted.w * newZoom);
+	int targetHeight = (int)lroundf((float)fitted.h * newZoom);
+	float targetCenterX = anchorX + (0.5f - relativeX) * (float)targetWidth;
+	float targetCenterY = anchorY + (0.5f - relativeY) * (float)targetHeight;
+	float fittedCenterX = (float)fitted.x + (float)fitted.w * 0.5f;
+	float fittedCenterY = (float)fitted.y + (float)fitted.h * 0.5f;
+	float maxOffsetX = (float)(targetWidth - fitted.w) * 0.5f;
+	float maxOffsetY = (float)(targetHeight - fitted.h) * 0.5f;
+
+	m_zoomLevel = newZoom;
+	m_zoomPanX = maxOffsetX > 0.0f
+		? ClampFloat((targetCenterX - fittedCenterX) / maxOffsetX, -1.0f, 1.0f)
+		: 0.0f;
+	m_zoomPanY = maxOffsetY > 0.0f
+		? ClampFloat((targetCenterY - fittedCenterY) / maxOffsetY, -1.0f, 1.0f)
+		: 0.0f;
+
+	if (m_zoomLevel <= MIN_VIDEO_ZOOM) {
+		resetZoom();
+	}
+	calculateDisplayRect();
+}
+
+void CSDLPlayer::applyDragPan(float deltaX, float deltaY)
+{
+	if (m_zoomLevel <= MIN_VIDEO_ZOOM + 0.0001f ||
+		m_videoWidth <= 0 || m_videoHeight <= 0) {
+		return;
+	}
+
+	SDL_Rect fitted = calculateFittedVideoBounds();
+	SDL_Rect current = calculateZoomedVideoBounds();
+	float maxOffsetX = (float)(current.w - fitted.w) * 0.5f;
+	float maxOffsetY = (float)(current.h - fitted.h) * 0.5f;
+
+	m_zoomPanX = maxOffsetX > 0.0f
+		? ClampFloat(m_zoomPanX + deltaX / maxOffsetX, -1.0f, 1.0f)
+		: 0.0f;
+	m_zoomPanY = maxOffsetY > 0.0f
+		? ClampFloat(m_zoomPanY + deltaY / maxOffsetY, -1.0f, 1.0f)
+		: 0.0f;
+	calculateDisplayRect();
+}
+
+void CSDLPlayer::stopPanning()
+{
+	if (!m_bPanning) {
+		return;
+	}
+
+	m_bPanning = false;
+	SDL_CaptureMouse(SDL_FALSE);
+	SDL_SetCursor(SDL_GetDefaultCursor());
+}
+
+void CSDLPlayer::resetZoom()
+{
+	stopPanning();
+	m_bLeftButtonDown = false;
+	m_bPanMoved = false;
+	m_leftClickCount = 0;
+	m_zoomLevel = MIN_VIDEO_ZOOM;
+	m_zoomPanX = 0.0f;
+	m_zoomPanY = 0.0f;
+}
+
+void CSDLPlayer::clearSessionVideoFrame()
+{
+	CAutoLock oLock(m_mutexVideo, "clearSessionVideoFrame");
+	m_videoTextureHasFrame = false;
+	InterlockedExchange(&m_yuvReady, 0);
+	InterlockedExchange(&m_yuvWriteIdx, 0);
+	InterlockedExchange(&m_yuvReadIdx, 0);
+	InterlockedExchange64(&m_qpcFrameArrival, 0);
+
+	if (m_videoWidth <= 0 || m_videoHeight <= 0) {
+		return;
+	}
+
+	int uvHeight = (m_videoHeight + 1) / 2;
+	for (int i = 0; i < 2; ++i) {
+		if (m_yuvBuffer[i][0] != NULL) {
+			memset(m_yuvBuffer[i][0], 0, m_yuvPitch[0] * m_videoHeight);
+		}
+		if (m_yuvBuffer[i][1] != NULL) {
+			memset(m_yuvBuffer[i][1], 128, m_yuvPitch[1] * uvHeight);
+		}
+		if (m_yuvBuffer[i][2] != NULL) {
+			memset(m_yuvBuffer[i][2], 128, m_yuvPitch[2] * uvHeight);
+		}
 	}
 }
 
@@ -1333,6 +2121,7 @@ void CSDLPlayer::unInitVideo()
 		SDL_DestroyTexture(m_videoTexture);
 		m_videoTexture = NULL;
 	}
+	m_videoTextureHasFrame = false;
 
 	// Free YUV double buffers
 	for (int i = 0; i < 2; i++) {
@@ -1587,7 +2376,7 @@ void CSDLPlayer::showWindow()
 		SDL_ShowWindow(m_window);
 		SDL_RaiseWindow(m_window);
 		m_bWindowVisible = true;
-		SDL_SetWindowTitle(m_window, "AirPlay Server - Connected");
+		SDL_SetWindowTitle(m_window, "AirPlay Receiver");
 	}
 }
 
