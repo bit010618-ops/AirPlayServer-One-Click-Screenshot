@@ -188,6 +188,7 @@ public:
 	void stopPanning();
 	void resetZoom();
 	void setCapturePrivacyMode(bool enabled);
+	void setPictureInPictureMode(bool enabled);
 	void applyConnectionState(bool connected, const char* deviceName);
 	void clearSessionVideoFrame();
 	void stopServerForShutdown();
@@ -222,6 +223,12 @@ public:
 	int m_windowedY;
 	int m_windowedW;          // Saved windowed size
 	int m_windowedH;
+	bool m_bPictureInPicture;
+	bool m_pipRestoreMaximized;
+	int m_pipRestoreX;
+	int m_pipRestoreY;
+	int m_pipRestoreW;
+	int m_pipRestoreH;
 
 	// Cursor auto-hide after inactivity
 	DWORD m_lastMouseMoveTime;  // Time of last mouse movement

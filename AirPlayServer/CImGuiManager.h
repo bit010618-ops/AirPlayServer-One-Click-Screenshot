@@ -84,8 +84,11 @@ public:
 		float zoomLevel = 1.0f, int rotationAngle = 0,
 		bool* pResetView = NULL, bool* pRotateView = NULL,
 		bool capturePrivacyActive = false, bool* pToggleCapturePrivacy = NULL,
-		bool captureExclusionAvailable = true, bool cleanFeedReady = true);
+		bool captureExclusionAvailable = true, bool cleanFeedReady = true,
+		bool pictureInPictureActive = false, bool* pTogglePictureInPicture = NULL);
+	void RenderPictureInPictureControls(bool* pExitPictureInPicture);
 	void RenderPerfGraphs(const SPerfData& perf, bool* pOpen);
+	void SetPictureInPictureMode(bool enabled);
 
 	// Input handling
 	bool WantCaptureMouse() const { return ImGui::GetIO().WantCaptureMouse; }
@@ -155,6 +158,7 @@ private:
 	bool m_overlayAnchorValid;
 	ImVec2 m_overlayExpandedSize;
 	bool m_overlayExpandedSizeValid;
+	bool m_pictureInPictureMode;
 
 	// Quality preset
 	EQualityPreset m_qualityPreset;
@@ -174,6 +178,7 @@ private:
 	float m_dpiScale;            // System DPI scale factor (1.0 = 96dpi, 1.25 = 120dpi, etc.)
 
 	float GetWindowDpiScale() const;
+	void ApplyWindowMinimumSize();
 	void ApplyDpiScale(float dpiScale);
 	void RebuildFonts();
 	void SetupStyle();

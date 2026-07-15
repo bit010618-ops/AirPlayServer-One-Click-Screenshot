@@ -247,6 +247,7 @@ CImGuiManager::CImGuiManager()
 	, m_overlayAnchorValid(false)
 	, m_overlayExpandedSize(0.0f, 0.0f)
 	, m_overlayExpandedSizeValid(false)
+	, m_pictureInPictureMode(false)
 	, m_qualityPreset(QUALITY_BALANCED)  // Default to balanced (60fps, best available filtering)
 	, m_screenCastEnabled(false)
 	, m_screenCastHideInterface(true)
@@ -311,19 +312,15 @@ float CImGuiManager::GetWindowDpiScale() const
 	return scale;
 }
 
-void CImGuiManager::ApplyDpiScale(float dpiScale)
+void CImGuiManager::ApplyWindowMinimumSize()
 {
-	if (dpiScale < 1.0f) dpiScale = 1.0f;
-	if (dpiScale > 4.0f) dpiScale = 4.0f;
-	m_dpiScale = dpiScale;
-	m_overlayExpandedSizeValid = false;
-
-	// SDL's minimum-size API uses client pixels. Keep the same effective
-	// 560x420 workspace at higher monitor scales, without requesting more than
-	// the current monitor can physically provide.
+	// PiP only needs room for the video and compact exit control. Normal mode
+	// retains the full workspace required by settings and session controls.
 	if (m_pWindow != NULL) {
-		int minimumWidth = (int)(560.0f * m_dpiScale + 0.5f);
-		int minimumHeight = (int)(420.0f * m_dpiScale + 0.5f);
+		float baseWidth = m_pictureInPictureMode ? 240.0f : 560.0f;
+		float baseHeight = m_pictureInPictureMode ? 135.0f : 420.0f;
+		int minimumWidth = (int)(baseWidth * m_dpiScale + 0.5f);
+		int minimumHeight = (int)(baseHeight * m_dpiScale + 0.5f);
 		int borderTop = 0;
 		int borderLeft = 0;
 		int borderBottom = 0;
@@ -345,6 +342,24 @@ void CImGuiManager::ApplyDpiScale(float dpiScale)
 		if (minimumHeight < 1) minimumHeight = 1;
 		SDL_SetWindowMinimumSize(m_pWindow, minimumWidth, minimumHeight);
 	}
+}
+
+void CImGuiManager::SetPictureInPictureMode(bool enabled)
+{
+	if (m_pictureInPictureMode == enabled) {
+		return;
+	}
+	m_pictureInPictureMode = enabled;
+	ApplyWindowMinimumSize();
+}
+
+void CImGuiManager::ApplyDpiScale(float dpiScale)
+{
+	if (dpiScale < 1.0f) dpiScale = 1.0f;
+	if (dpiScale > 4.0f) dpiScale = 4.0f;
+	m_dpiScale = dpiScale;
+	m_overlayExpandedSizeValid = false;
+	ApplyWindowMinimumSize();
 
 	// Recreate the style from an unscaled baseline on every transition. Scaling
 	// the live style in-place would compound after 100% -> 150% -> 100% moves.
@@ -864,7 +879,8 @@ void CImGuiManager::RenderOverlay(const char* deviceName, bool isConnected, cons
 	float zoomLevel, int rotationAngle,
 	bool* pResetView, bool* pRotateView,
 	bool capturePrivacyActive, bool* pToggleCapturePrivacy,
-	bool captureExclusionAvailable, bool cleanFeedReady)
+	bool captureExclusionAvailable, bool cleanFeedReady,
+	bool pictureInPictureActive, bool* pTogglePictureInPicture)
 {
 	if (!m_bInitialized) {
 		return;
@@ -872,6 +888,7 @@ void CImGuiManager::RenderOverlay(const char* deviceName, bool isConnected, cons
 	if (pResetView != NULL) *pResetView = false;
 	if (pRotateView != NULL) *pRotateView = false;
 	if (pToggleCapturePrivacy != NULL) *pToggleCapturePrivacy = false;
+	if (pTogglePictureInPicture != NULL) *pTogglePictureInPicture = false;
 
 	ImGui::SetCurrentContext(m_pContext);
 	ImGuiIO& io = ImGui::GetIO();
@@ -1057,6 +1074,15 @@ void CImGuiManager::RenderOverlay(const char* deviceName, bool isConnected, cons
 	}
 	if (defaultView) ImGui::EndDisabled();
 	ShowTooltip("Return to fit-to-window at 0 degrees");
+	if (ImGui::Button(pictureInPictureActive
+		? "Exit picture in picture##PictureInPicture"
+		: "Picture in picture##PictureInPicture",
+		ImVec2(-1.0f, 34.0f * scale))) {
+		if (pTogglePictureInPicture != NULL) *pTogglePictureInPicture = true;
+	}
+	ShowTooltip(pictureInPictureActive
+		? "Restore the normal receiver window (P)"
+		: "Keep a compact video window above other apps (P)");
 	if (ImGui::Button(capturePrivacyActive ? "Show in captures##CapturePrivacy" : "Hide from captures##CapturePrivacy",
 		ImVec2(-1.0f, 34.0f * scale))) {
 		if (pToggleCapturePrivacy != NULL) *pToggleCapturePrivacy = true;
@@ -1151,6 +1177,39 @@ void CImGuiManager::RenderOverlay(const char* deviceName, bool isConnected, cons
 	ImGui::End();
 	ImGui::PopStyleVar(3);
 }
+
+void CImGuiManager::RenderPictureInPictureControls(bool* pExitPictureInPicture)
+{
+	if (pExitPictureInPicture != NULL) *pExitPictureInPicture = false;
+	if (!m_bInitialized) {
+		return;
+	}
+
+	ImGui::SetCurrentContext(m_pContext);
+	ImGuiIO& io = ImGui::GetIO();
+	float scale = m_dpiScale;
+	float margin = 10.0f * scale;
+	ImVec2 controlSize(94.0f * scale, 34.0f * scale);
+	ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - margin, margin),
+		ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+	ImGui::SetNextWindowSize(controlSize, ImGuiCond_Always);
+	ImGui::SetNextWindowBgAlpha(0.86f);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f * scale);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f * scale);
+	ImGui::Begin("##PictureInPictureControls", NULL,
+		ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+		ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+		ImGuiWindowFlags_NoSavedSettings);
+	if (ImGui::Button("Exit PiP##ExitPictureInPicture", controlSize) &&
+		pExitPictureInPicture != NULL) {
+		*pExitPictureInPicture = true;
+	}
+	ShowTooltip("Restore the normal receiver window (P)");
+	ImGui::End();
+	ImGui::PopStyleVar(3);
+}
+
 // Helper: draw a quiet sparkline using ImDrawList.
 // data is a circular buffer, offset is the write position (oldest data)
 static void DrawLineGraph(ImDrawList* drawList, ImVec2 pos, ImVec2 size,

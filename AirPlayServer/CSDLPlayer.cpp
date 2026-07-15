@@ -30,6 +30,8 @@ namespace {
 	constexpr DWORD DISCONNECT_FADE_OUT_MS = 320;
 	constexpr int MIN_WINDOW_WIDTH = 560;
 	constexpr int MIN_WINDOW_HEIGHT = 420;
+	constexpr int PIP_LONG_EDGE = 420;
+	constexpr int PIP_EDGE_MARGIN = 24;
 	constexpr DWORD NATIVE_RESIZE_FRAME_INTERVAL_MS = 16;
 	constexpr UINT_PTR NATIVE_RESIZE_TIMER_ID = 0x41525052;
 	const wchar_t NATIVE_RESIZE_PLAYER_PROPERTY[] = L"AirPlayReceiver.NativeResizePlayer";
@@ -284,6 +286,12 @@ CSDLPlayer::CSDLPlayer()
 	, m_windowedY(0)
 	, m_windowedW(800)
 	, m_windowedH(600)
+	, m_bPictureInPicture(false)
+	, m_pipRestoreMaximized(false)
+	, m_pipRestoreX(0)
+	, m_pipRestoreY(0)
+	, m_pipRestoreW(800)
+	, m_pipRestoreH(600)
 	, m_lastMouseMoveTime(0)
 	, m_bCursorHidden(false)
 	, m_panCursor(NULL)
@@ -720,6 +728,7 @@ void CSDLPlayer::applyConnectionState(bool connected, const char* deviceName)
 
 	if (m_bConnected && !connected) {
 		// Transitioning from connected to disconnected
+		setPictureInPictureMode(false);
 		m_cleanFeed.Hide();
 		setCapturePrivacyMode(false);
 		m_bDisconnecting = true;
@@ -918,7 +927,7 @@ void CSDLPlayer::loopEvents()
 				} else if (key == SDLK_F1 && m_bConnected) {
 					globalShortcut = true;
 				} else if (!m_imgui.WantTextInput() && !hasCommandModifier &&
-					(key == SDLK_ESCAPE || key == SDLK_f || key == SDLK_r ||
+					(key == SDLK_ESCAPE || key == SDLK_f || key == SDLK_p || key == SDLK_r ||
 						(key == SDLK_h && m_bConnected))) {
 					globalShortcut = true;
 				}
@@ -987,7 +996,8 @@ void CSDLPlayer::loopEvents()
 
 						// Fit on the monitor that currently owns the window while retaining
 						// the user's chosen window center whenever the usable bounds allow it.
-						if (!m_bFullscreen && !m_imgui.IsScreenCastEnabled()) {
+						if (!m_bFullscreen && !m_bPictureInPicture &&
+							!m_imgui.IsScreenCastEnabled()) {
 							resizeWindowForVideo((int)width, (int)height);
 						}
 
@@ -1093,8 +1103,14 @@ void CSDLPlayer::loopEvents()
 				}
 				case SDLK_F1: {
 					// F1 toggles performance graphs overlay
-					if (m_bConnected) {
+					if (m_bConnected && !m_bPictureInPicture) {
 						m_bShowPerfGraphs = !m_bShowPerfGraphs;
+					}
+					break;
+				}
+				case SDLK_p: {
+					if (!hasCommandModifier && m_bConnected) {
+						setPictureInPictureMode(!m_bPictureInPicture);
 					}
 					break;
 				}
@@ -1487,18 +1503,29 @@ void CSDLPlayer::loopEvents()
 		// 4. Render ImGui overlay on top
 		m_imgui.NewFrame();
 		if (m_bConnected) {
-			// Controls and diagnostics are mutually exclusive so the cast remains visible.
-			if (!m_bShowPerfGraphs) {
+			if (m_bPictureInPicture) {
+				bool exitPictureInPicture = false;
+				m_imgui.RenderPictureInPictureControls(&exitPictureInPicture);
+				if (exitPictureInPicture) {
+					setPictureInPictureMode(false);
+				}
+			} else if (!m_bShowPerfGraphs) {
+				// Controls and diagnostics are mutually exclusive so the cast remains visible.
 				bool resetView = false;
 				bool rotateView = false;
 				bool toggleCapturePrivacy = false;
+				bool togglePictureInPicture = false;
 				m_imgui.RenderOverlay(m_serverName, m_bConnected, m_connectedDeviceName,
 					m_videoWidth, m_videoHeight, m_displayFPS, m_currentBitrateMbps,
 					m_totalFrames, m_droppedFrames, m_zoomLevel, m_rotationAngle,
 					&resetView, &rotateView, m_capturePrivacyActive, &toggleCapturePrivacy,
-					m_cleanFeed.IsCaptureExclusionAvailable(), m_cleanFeed.IsReady());
+					m_cleanFeed.IsCaptureExclusionAvailable(), m_cleanFeed.IsReady(),
+					m_bPictureInPicture, &togglePictureInPicture);
 				if (toggleCapturePrivacy) {
 					setCapturePrivacyMode(!m_capturePrivacyActive);
+				}
+				if (togglePictureInPicture) {
+					setPictureInPictureMode(true);
 				}
 				if (rotateView) {
 					m_rotationAngle = (m_rotationAngle + 90) % 360;
@@ -2216,7 +2243,9 @@ void CSDLPlayer::renderDuringNativeResize()
 	// visually stable during both moves and resizes.
 	m_imgui.NewFrame();
 	if (m_bConnected) {
-		if (!m_bShowPerfGraphs) {
+		if (m_bPictureInPicture) {
+			m_imgui.RenderPictureInPictureControls(NULL);
+		} else if (!m_bShowPerfGraphs) {
 			bool ignoredReset = false;
 			bool ignoredRotate = false;
 			m_imgui.RenderOverlay(m_serverName, m_bConnected, m_connectedDeviceName,
@@ -2254,6 +2283,101 @@ void CSDLPlayer::setCapturePrivacyMode(bool enabled)
 	m_imgui.ShowOverlay();
 }
 
+void CSDLPlayer::setPictureInPictureMode(bool enabled)
+{
+	if (m_window == NULL || m_bPictureInPicture == enabled ||
+		(enabled && !m_bConnected) || m_bResizing) {
+		return;
+	}
+
+	if (enabled && m_bFullscreen) {
+		toggleFullscreen();
+		if (m_bFullscreen) {
+			return;
+		}
+	}
+
+	m_bResizing = true;
+	stopPanning();
+	m_bLeftButtonDown = false;
+	m_bPanMoved = false;
+	m_leftClickCount = 0;
+
+	if (enabled) {
+		Uint32 flags = SDL_GetWindowFlags(m_window);
+		m_pipRestoreMaximized = (flags & SDL_WINDOW_MAXIMIZED) != 0;
+		if (m_pipRestoreMaximized) {
+			SDL_RestoreWindow(m_window);
+		}
+		SDL_GetWindowPosition(m_window, &m_pipRestoreX, &m_pipRestoreY);
+		SDL_GetWindowSize(m_window, &m_pipRestoreW, &m_pipRestoreH);
+		if (m_pipRestoreW < 1) m_pipRestoreW = MIN_WINDOW_WIDTH;
+		if (m_pipRestoreH < 1) m_pipRestoreH = MIN_WINDOW_HEIGHT;
+
+		int sourceWidth = m_videoWidth > 0 ? m_videoWidth : 16;
+		int sourceHeight = m_videoHeight > 0 ? m_videoHeight : 9;
+		if (m_rotationAngle == 90 || m_rotationAngle == 270) {
+			int swap = sourceWidth;
+			sourceWidth = sourceHeight;
+			sourceHeight = swap;
+		}
+		int targetWidth = PIP_LONG_EDGE;
+		int targetHeight = (int)((long long)targetWidth * sourceHeight / sourceWidth);
+		if (sourceHeight > sourceWidth) {
+			targetHeight = PIP_LONG_EDGE;
+			targetWidth = (int)((long long)targetHeight * sourceWidth / sourceHeight);
+		}
+		if (targetWidth < 240) targetWidth = 240;
+		if (targetHeight < 135) targetHeight = 135;
+
+		m_bPictureInPicture = true;
+		m_bShowPerfGraphs = false;
+		m_imgui.SetPictureInPictureMode(true);
+		SDL_SetWindowAlwaysOnTop(m_window, SDL_TRUE);
+		SDL_SetWindowSize(m_window, targetWidth, targetHeight);
+		SDL_GetWindowSize(m_window, &targetWidth, &targetHeight);
+
+		int displayIndex = SDL_GetWindowDisplayIndex(m_window);
+		SDL_Rect usableBounds = {};
+		if (displayIndex >= 0 &&
+			SDL_GetDisplayUsableBounds(displayIndex, &usableBounds) == 0) {
+			int borderTop = 0;
+			int borderLeft = 0;
+			int borderBottom = 0;
+			int borderRight = 0;
+			SDL_GetWindowBordersSize(m_window, &borderTop, &borderLeft,
+				&borderBottom, &borderRight);
+			int outerWidth = targetWidth + borderLeft + borderRight;
+			int outerHeight = targetHeight + borderTop + borderBottom;
+			int outerX = usableBounds.x + usableBounds.w - outerWidth - PIP_EDGE_MARGIN;
+			int outerY = usableBounds.y + usableBounds.h - outerHeight - PIP_EDGE_MARGIN;
+			if (outerX < usableBounds.x) outerX = usableBounds.x;
+			if (outerY < usableBounds.y) outerY = usableBounds.y;
+			SDL_SetWindowPosition(m_window, outerX + borderLeft, outerY + borderTop);
+		}
+		SDL_SetWindowTitle(m_window, "AirPlay Receiver - Picture in Picture");
+	} else {
+		m_bPictureInPicture = false;
+		SDL_SetWindowAlwaysOnTop(m_window, SDL_FALSE);
+		m_imgui.SetPictureInPictureMode(false);
+		SDL_SetWindowPosition(m_window, m_pipRestoreX, m_pipRestoreY);
+		SDL_SetWindowSize(m_window, m_pipRestoreW, m_pipRestoreH);
+		if (m_pipRestoreMaximized) {
+			SDL_MaximizeWindow(m_window);
+		}
+		SDL_SetWindowTitle(m_window, "AirPlay Receiver");
+		m_windowedX = m_pipRestoreX;
+		m_windowedY = m_pipRestoreY;
+		m_windowedW = m_pipRestoreW;
+		m_windowedH = m_pipRestoreH;
+		m_imgui.ShowOverlay();
+	}
+
+	SDL_GetWindowSize(m_window, &m_windowWidth, &m_windowHeight);
+	calculateDisplayRect();
+	m_bResizing = false;
+}
+
 void CSDLPlayer::toggleFullscreen()
 {
 	stopPanning();
@@ -2267,6 +2391,9 @@ void CSDLPlayer::toggleFullscreen()
 
 	if (m_bResizing) {
 		return;
+	}
+	if (m_bPictureInPicture) {
+		setPictureInPictureMode(false);
 	}
 	m_bResizing = true;
 
