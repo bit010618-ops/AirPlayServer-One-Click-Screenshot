@@ -190,6 +190,7 @@ public:
 	void setCapturePrivacyMode(bool enabled);
 	void setPictureInPictureMode(bool enabled);
 	double pictureInPictureAspectRatio() const;
+	void applyPictureInPictureWindowShape();
 	void resizePictureInPictureToAspect();
 	void constrainPictureInPictureRect(WPARAM sizingEdge, RECT* windowRect) const;
 	LRESULT pictureInPictureHitTest(HWND window, LPARAM position) const;

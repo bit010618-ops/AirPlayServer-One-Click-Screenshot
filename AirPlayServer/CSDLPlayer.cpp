@@ -1058,6 +1058,9 @@ void CSDLPlayer::loopEvents()
 						m_bMainWindowMinimized = false;
 						m_windowWidth = newW;
 						m_windowHeight = newH;
+						if (m_bPictureInPicture) {
+							applyPictureInPictureWindowShape();
+						}
 						// Recalculate even when a programmatic resize pre-populated the
 						// cached size; the renderer output is authoritative only now.
 						calculateDisplayRect();
@@ -2218,6 +2221,9 @@ void CSDLPlayer::renderDuringNativeResize()
 	SDL_GetWindowSize(m_window, &width, &height);
 	if (width > 0 && height > 0) {
 		handleLiveResize(width, height);
+		if (m_bPictureInPicture) {
+			applyPictureInPictureWindowShape();
+		}
 	}
 
 	// The normal event loop is paused by Windows during a border drag. Upload
@@ -2304,6 +2310,39 @@ double CSDLPlayer::pictureInPictureAspectRatio() const
 		height = swap;
 	}
 	return height > 0 ? (double)width / (double)height : 16.0 / 9.0;
+}
+
+void CSDLPlayer::applyPictureInPictureWindowShape()
+{
+	if (m_hwnd == NULL) {
+		return;
+	}
+	if (!m_bPictureInPicture) {
+		SetWindowRgn(m_hwnd, NULL, TRUE);
+		return;
+	}
+
+	RECT bounds = {};
+	if (!GetWindowRect(m_hwnd, &bounds)) {
+		return;
+	}
+
+	int width = bounds.right - bounds.left;
+	int height = bounds.bottom - bounds.top;
+	if (width <= 0 || height <= 0) {
+		return;
+	}
+
+	UINT dpi = GetDpiForWindow(m_hwnd);
+	if (dpi == 0) dpi = 96;
+	int cornerRadius = MulDiv(12, (int)dpi, 96);
+	if (cornerRadius < 6) cornerRadius = 6;
+
+	HRGN region = CreateRoundRectRgn(0, 0, width + 1, height + 1,
+		cornerRadius * 2, cornerRadius * 2);
+	if (region != NULL && SetWindowRgn(m_hwnd, region, TRUE) == 0) {
+		DeleteObject(region);
+	}
 }
 
 void CSDLPlayer::constrainPictureInPictureRect(WPARAM sizingEdge, RECT* windowRect) const
@@ -2486,6 +2525,7 @@ void CSDLPlayer::setPictureInPictureMode(bool enabled)
 		SDL_SetWindowAlwaysOnTop(m_window, SDL_TRUE);
 		SDL_SetWindowSize(m_window, targetWidth, targetHeight);
 		SDL_GetWindowSize(m_window, &targetWidth, &targetHeight);
+		applyPictureInPictureWindowShape();
 
 		int displayIndex = SDL_GetWindowDisplayIndex(m_window);
 		SDL_Rect usableBounds = {};
@@ -2508,6 +2548,7 @@ void CSDLPlayer::setPictureInPictureMode(bool enabled)
 		SDL_SetWindowTitle(m_window, "AirPlay Receiver - Picture in Picture");
 	} else {
 		m_bPictureInPicture = false;
+		applyPictureInPictureWindowShape();
 		SDL_SetWindowAlwaysOnTop(m_window, SDL_FALSE);
 		SDL_SetWindowBordered(m_window, SDL_TRUE);
 		SDL_SetWindowResizable(m_window, SDL_TRUE);
