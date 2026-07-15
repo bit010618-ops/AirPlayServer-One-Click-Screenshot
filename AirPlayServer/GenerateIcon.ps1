@@ -42,7 +42,9 @@ function New-IconFrame {
         $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
 
         [float]$r = $renderSize
-        [float]$margin = $r * 0.055
+        # Windows already applies taskbar padding. Keep only enough transparent
+        # inset to preserve antialiased corners and avoid making the mark tiny.
+        [float]$margin = $r * 0.012
         $tileRect = [System.Drawing.RectangleF]::new(
             $margin,
             $margin,
