@@ -35,17 +35,38 @@ A high-performance AirPlay receiver for Windows with real-time video streaming a
 4. Select your Windows PC from the list of available AirPlay devices
 5. Start streaming!
 
+### Optional AirPlay PIN
+
+On the disconnected home screen, enable **Require PIN**. The receiver generates a temporary four-digit PIN in memory for the current server session; it is never saved to disk. With **Hide PIN from screen capture** enabled, accepting a connection first excludes the receiver window from supported Windows capture and recording APIs. After a one-second safety delay, the real PIN appears locally and remains visible until the device connects or you cancel. Capture exclusion remains active for that entire interval. If Windows cannot enable exclusion, the PIN is not shown.
+
 ### Controls
 
 | Key | Action |
 |-----|--------|
 | **H** | Toggle overlay UI |
+| **Ctrl+Shift+H** | Toggle capture-only privacy |
 | **F** / **Double-click** | Toggle fullscreen |
 | **F1** | Toggle diagnostics while connected (temporarily replaces controls) |
 | **R** | Rotate video 90° clockwise |
 | **Mouse wheel** | Zoom video from fit to 5× |
 | **Left-drag** (while zoomed) | Pan around the zoomed video |
 | Mouse movement | Shows cursor (auto-hides after 5s) |
+
+The connected-session controls also include **Hide from captures**. Capture privacy keeps the receiver fully visible and usable on your own monitor, excludes its main window from supported Windows recording and screen-sharing APIs, and makes the clean-feed output solid black. Select **Show in captures** or press **Ctrl+Shift+H** to disable it.
+
+### Screen Cast / OBS clean feed
+
+While a device is connected, open the session controls and enable **Screen Cast mode**. The normal receiver window stays fully usable on your display, including its controls, while capture and sharing apps can use a clean video-only target named **AirPlay Receiver - Clean Feed**.
+
+1. In OBS, add **Window Capture** and use the Windows 10/11 capture method.
+2. Select `AirPlay Receiver - Clean Feed`.
+3. Disable OBS's **Capture Cursor** option for a completely clean feed.
+
+In Discord, choose **Share Your Screen** → **Applications** → `AirPlay Receiver - Clean Feed`. The target is available only while a device is connected and video is being rendered.
+
+The clean-feed target follows the visible video area as you resize the receiver window, rotate, zoom, or pan. With **Crop clean feed to video** enabled, it excludes letterboxing and pillarboxing. The target is hidden between AirPlay sessions and reappears on reconnect.
+
+**Hide interface from captures** also protects the local receiver window from supported Display Capture paths on Windows 10 version 2004 or newer. This is a presentation feature, not DRM; Window Capture is the supported OBS workflow.
 
 ### Quality Presets
 
@@ -56,6 +77,7 @@ Changeable in real-time from the connected-session overlay:
 | Best | 30 | Best available | Sharpest image quality |
 | Balanced | 60 | Best available | Default, smooth + sharp |
 | Low latency | 60 | Linear | Fastest response |
+
 
 ## Troubleshooting
 
