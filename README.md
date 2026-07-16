@@ -4,6 +4,51 @@ AirPlayServer receives AirPlay video, audio, and screen mirroring on Windows.
 
 This project is an updated fork of [fingergit/airplay2-win](https://github.com/fingergit/airplay2-win).
 
+## Main Screen
+<div align="center">
+    <img style="height: 512px; width: auto;" src="https://github.com/user-attachments/assets/ffedab29-b483-467d-991a-4060503b0fc0" />
+</div>
+
+<div align="center">
+    <table>
+        <tr>
+            <th>Settings</th>
+            <th>Pin Approval</th>
+        </tr>
+        <tr>
+            <td>
+                <img width="420" src="https://github.com/user-attachments/assets/f6f46275-112e-4126-9baf-61666502d03f" />
+            </td>
+            <td>
+                <img width="420" src="https://github.com/user-attachments/assets/c492d993-0cae-4abb-892c-65c601e13a68" />
+            </td>
+        </tr>
+    </table>
+</div>
+
+## Viewer
+<div align="center">
+    <img style="height: 720px; width: auto;" src="https://github.com/user-attachments/assets/9b0c071e-070a-43f0-89b5-a936d4c11ea7" />
+</div>
+
+## 
+<div align="center">
+    <table>
+        <tr>
+            <th>Controls</th>
+            <th>PIP (Picture in Picture) Mode</th>
+        </tr>
+        <tr>
+            <td>
+                <img src="https://github.com/user-attachments/assets/3997a422-650b-42ad-8f42-9eba0e71af10" width="420" />
+            </td>
+            <td>
+                <img src="https://github.com/user-attachments/assets/b98681b5-f79a-493e-b9af-c1cd6a89c8c9" width="420" />
+            </td>
+        </tr>
+    </table>
+</div>
+
 ## Install
 
 1. Download [AirPlay2-Win-x64.zip](https://github.com/xenos1337/AirPlayServer/releases/latest).
