@@ -1,4 +1,6 @@
-#include "CSDLPlayer.h"
+﻿#include "CSDLPlayer.h"
+#include "CScreenSnipper.h"
+// AIRPLAY_REGION_CAPTURE_V2
 #include <stdio.h>
 #include <malloc.h>  // For _aligned_malloc/_aligned_free
 #include <math.h>    // For powf() in volume conversion
@@ -420,6 +422,7 @@ CSDLPlayer::~CSDLPlayer()
 
 bool CSDLPlayer::init()
 {
+    ScreenSnipperInitialize();
 	// Request 1ms Windows timer resolution (for accurate Sleep/SDL_Delay)
 	timeBeginPeriod(1);
 
@@ -840,6 +843,7 @@ void CSDLPlayer::applyConnectionState(bool connected, const char* deviceName)
 
 void CSDLPlayer::unInit()
 {
+    ScreenSnipperShutdown();
 	stopServerForShutdown();
 	unInitVideo();
 	unInitAudio();
@@ -1567,6 +1571,36 @@ void CSDLPlayer::loopEvents()
 		}
 		renderPinApprovalPopup(lastPinApprovalGeneration);
 
+  // Region capture panel. Hidden with the normal connected overlay;
+  // the global Ctrl+Shift+C shortcut always remains available.
+  {
+      ImGuiIO& captureIO = ImGui::GetIO();
+      ImGui::SetNextWindowPos(
+          ImVec2(captureIO.DisplaySize.x - 184.0f, 12.0f),
+          ImGuiCond_Always);
+      ImGui::SetNextWindowBgAlpha(0.90f);
+
+      const ImGuiWindowFlags captureFlags =
+          ImGuiWindowFlags_NoDecoration |
+          ImGuiWindowFlags_AlwaysAutoResize |
+          ImGuiWindowFlags_NoSavedSettings |
+          ImGuiWindowFlags_NoNav |
+          ImGuiWindowFlags_NoMove;
+
+      ImGui::Begin(
+          "##AirPlayRegionCapture",
+          NULL,
+          captureFlags);
+
+      if (ImGui::Button(
+  "Region Capture",
+  ImVec2(160.0f, 0.0f))) {
+          ScreenSnipperStartCapture();
+      }
+
+      ImGui::TextDisabled("Ctrl+Shift+C");
+      ImGui::End();
+  }
 		// 4b. Render performance graphs if F1 toggled on
 		if (m_bShowPerfGraphs && m_bConnected) {
 			float liveFrameTime = (m_perfAccumCount > 0) ? m_perfAccumFrameTime / (float)m_perfAccumCount : 0.0f;
@@ -3321,3 +3355,4 @@ void CSDLPlayer::requestResize(int width, int height)
 	m_pendingResizeWidth = width;
 	m_pendingResizeHeight = height;
 }
+

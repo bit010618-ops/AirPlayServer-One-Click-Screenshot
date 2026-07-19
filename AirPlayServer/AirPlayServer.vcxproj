@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -186,6 +186,7 @@ xcopy /y "$(SolutionDir)external\plist\lib\$(PlatformTarget)\*.dll" $(OutDir)</C
     <ClCompile Include="CAutoLock.cpp" />
     <ClCompile Include="CImGuiManager.cpp" />
     <ClCompile Include="CSDLPlayer.cpp" />
+    <ClCompile Include="CScreenSnipper.cpp" />
     <ClCompile Include="FgUtf8Utils.cpp" />
     <ClCompile Include="..\external\imgui\imgui.cpp" />
     <ClCompile Include="..\external\imgui\imgui_draw.cpp" />
@@ -201,6 +202,7 @@ xcopy /y "$(SolutionDir)external\plist\lib\$(PlatformTarget)\*.dll" $(OutDir)</C
     <ClInclude Include="CAutoLock.h" />
     <ClInclude Include="CImGuiManager.h" />
     <ClInclude Include="CSDLPlayer.h" />
+    <ClInclude Include="CScreenSnipper.h" />
     <ClInclude Include="FgUtf8Utils.h" />
     <ClInclude Include="resource.h" />
   </ItemGroup>
@@ -215,3 +217,4 @@ xcopy /y "$(SolutionDir)external\plist\lib\$(PlatformTarget)\*.dll" $(OutDir)</C
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
 </Project>
+
