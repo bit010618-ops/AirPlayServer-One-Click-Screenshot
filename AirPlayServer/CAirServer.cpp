@@ -81,3 +81,4 @@ float CAirServer::setVideoScale(float fRatio)
     return fgServerScale(m_pServer, fRatio);
 }
 
+
