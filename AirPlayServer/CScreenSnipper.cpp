@@ -54,7 +54,6 @@ namespace
     struct ToolbarButton
     {
         RECT rect = {};
-        const wchar_t* text = L"";
         Tool tool = Tool::Rectangle;
         ButtonAction action = ButtonAction::Tool;
     };
@@ -381,8 +380,6 @@ namespace
 
             std::memcpy(m_dimBits, m_screenBits, byteCount);
 
-            // Precompute a gently darkened frozen desktop image.
-            // Paint operations later only use BitBlt, which avoids flashing.
             for (SIZE_T offset = 0;
                  offset + 3 < byteCount;
                  offset += 4) {
@@ -776,9 +773,9 @@ namespace
 
         std::vector<ToolbarButton> ToolbarButtons() const
         {
-            constexpr int buttonWidth = 58;
-            constexpr int buttonHeight = 34;
-            constexpr int gap = 4;
+            constexpr int buttonWidth = 40;
+            constexpr int buttonHeight = 40;
+            constexpr int gap = 6;
             constexpr int count = 9;
             constexpr int totalWidth =
                 count * buttonWidth + (count - 1) * gap;
@@ -805,21 +802,20 @@ namespace
 
             struct Definition
             {
-                const wchar_t* text;
                 Tool tool;
                 ButtonAction action;
             };
 
             const Definition definitions[count] = {
-                { L"矩形", Tool::Rectangle, ButtonAction::Tool },
-                { L"圆形", Tool::Ellipse, ButtonAction::Tool },
-                { L"三角", Tool::Triangle, ButtonAction::Tool },
-                { L"箭头", Tool::Arrow, ButtonAction::Tool },
-                { L"画笔", Tool::Brush, ButtonAction::Tool },
-                { L"马赛克", Tool::Mosaic, ButtonAction::Tool },
-                { L"撤销", Tool::Rectangle, ButtonAction::Undo },
-                { L"完成", Tool::Rectangle, ButtonAction::Finish },
-                { L"取消", Tool::Rectangle, ButtonAction::Cancel }
+                { Tool::Rectangle, ButtonAction::Tool },
+                { Tool::Ellipse, ButtonAction::Tool },
+                { Tool::Triangle, ButtonAction::Tool },
+                { Tool::Arrow, ButtonAction::Tool },
+                { Tool::Brush, ButtonAction::Tool },
+                { Tool::Mosaic, ButtonAction::Tool },
+                { Tool::Rectangle, ButtonAction::Undo },
+                { Tool::Rectangle, ButtonAction::Finish },
+                { Tool::Rectangle, ButtonAction::Cancel }
             };
 
             std::vector<ToolbarButton> buttons;
@@ -827,7 +823,6 @@ namespace
 
             for (int index = 0; index < count; ++index) {
                 ToolbarButton button;
-                button.text = definitions[index].text;
                 button.tool = definitions[index].tool;
                 button.action = definitions[index].action;
                 button.rect = {
@@ -842,65 +837,245 @@ namespace
             return buttons;
         }
 
+        void DrawButtonFrame(
+            HDC dc,
+            const RECT& rect,
+            bool selected,
+            bool confirm,
+            bool cancel)
+        {
+            COLORREF fill = RGB(247, 247, 247);
+            COLORREF border = RGB(180, 180, 180);
+
+            if (selected) {
+                fill = RGB(52, 129, 246);
+                border = RGB(52, 129, 246);
+            } else if (confirm) {
+                fill = RGB(245, 251, 245);
+                border = RGB(72, 180, 97);
+            } else if (cancel) {
+                fill = RGB(252, 245, 245);
+                border = RGB(216, 84, 84);
+            }
+
+            HBRUSH brush = CreateSolidBrush(fill);
+            HPEN pen = CreatePen(PS_SOLID, 1, border);
+
+            HGDIOBJ oldBrush = SelectObject(dc, brush);
+            HGDIOBJ oldPen = SelectObject(dc, pen);
+
+            RoundRect(
+                dc,
+                rect.left,
+                rect.top,
+                rect.right,
+                rect.bottom,
+                8,
+                8);
+
+            SelectObject(dc, oldBrush);
+            SelectObject(dc, oldPen);
+            DeleteObject(brush);
+            DeleteObject(pen);
+        }
+
+        void DrawUndoIcon(HDC dc, const RECT& rect, COLORREF color)
+        {
+            HPEN pen = CreatePen(PS_SOLID, 3, color);
+            HGDIOBJ oldPen = SelectObject(dc, pen);
+
+            const int cy = (rect.top + rect.bottom) / 2;
+            const int left = rect.left + 11;
+            const int right = rect.right - 10;
+
+            Arc(
+                dc,
+                left,
+                rect.top + 9,
+                right + 6,
+                rect.bottom - 7,
+                right,
+                cy,
+                left + 8,
+                rect.top + 11);
+
+            MoveToEx(dc, left + 10, rect.top + 11, NULL);
+            LineTo(dc, left + 1, rect.top + 11);
+            LineTo(dc, left + 6, rect.top + 19);
+
+            SelectObject(dc, oldPen);
+            DeleteObject(pen);
+        }
+
+        void DrawCheckIcon(HDC dc, const RECT& rect, COLORREF color)
+        {
+            HPEN pen = CreatePen(PS_SOLID, 4, color);
+            HGDIOBJ oldPen = SelectObject(dc, pen);
+
+            const int x1 = rect.left + 10;
+            const int y1 = rect.top + 21;
+            const int x2 = rect.left + 18;
+            const int y2 = rect.top + 29;
+            const int x3 = rect.right - 10;
+            const int y3 = rect.top + 12;
+
+            MoveToEx(dc, x1, y1, NULL);
+            LineTo(dc, x2, y2);
+            LineTo(dc, x3, y3);
+
+            SelectObject(dc, oldPen);
+            DeleteObject(pen);
+        }
+
+        void DrawCrossIcon(HDC dc, const RECT& rect, COLORREF color)
+        {
+            HPEN pen = CreatePen(PS_SOLID, 4, color);
+            HGDIOBJ oldPen = SelectObject(dc, pen);
+
+            MoveToEx(dc, rect.left + 11, rect.top + 11, NULL);
+            LineTo(dc, rect.right - 11, rect.bottom - 11);
+            MoveToEx(dc, rect.right - 11, rect.top + 11, NULL);
+            LineTo(dc, rect.left + 11, rect.bottom - 11);
+
+            SelectObject(dc, oldPen);
+            DeleteObject(pen);
+        }
+
+        void DrawToolbarIcon(
+            HDC dc,
+            const ToolbarButton& button,
+            bool selected)
+        {
+            COLORREF color =
+                selected ? RGB(255, 255, 255) : RGB(42, 42, 42);
+
+            if (button.action == ButtonAction::Undo) {
+                DrawUndoIcon(dc, button.rect, color);
+                return;
+            }
+
+            if (button.action == ButtonAction::Finish) {
+                DrawCheckIcon(dc, button.rect, RGB(72, 180, 97));
+                return;
+            }
+
+            if (button.action == ButtonAction::Cancel) {
+                DrawCrossIcon(dc, button.rect, RGB(216, 84, 84));
+                return;
+            }
+
+            HPEN pen = CreatePen(PS_SOLID, 3, color);
+            HGDIOBJ oldPen = SelectObject(dc, pen);
+            HGDIOBJ oldBrush =
+                SelectObject(dc, GetStockObject(NULL_BRUSH));
+
+            const int left = button.rect.left + 10;
+            const int top = button.rect.top + 10;
+            const int right = button.rect.right - 10;
+            const int bottom = button.rect.bottom - 10;
+            const int middleX = (left + right) / 2;
+            const int middleY = (top + bottom) / 2;
+
+            switch (button.tool) {
+            case Tool::Rectangle:
+                Rectangle(dc, left, top, right, bottom);
+                break;
+
+            case Tool::Ellipse:
+                Ellipse(dc, left, top, right, bottom);
+                break;
+
+            case Tool::Triangle:
+            {
+                POINT triangle[4] = {
+                    { middleX, top },
+                    { left, bottom },
+                    { right, bottom },
+                    { middleX, top }
+                };
+                Polyline(dc, triangle, 4);
+                break;
+            }
+
+            case Tool::Arrow:
+            {
+                POINT start = { left, bottom - 2 };
+                POINT end = { right, top + 2 };
+                DrawArrow(dc, start, end, color, 3);
+                break;
+            }
+
+            case Tool::Brush:
+            {
+                POINT points[4] = {
+                    { left, bottom - 2 },
+                    { left + 5, middleY + 4 },
+                    { middleX, middleY - 1 },
+                    { right, top + 1 }
+                };
+                Polyline(dc, points, 4);
+
+                HBRUSH tip = CreateSolidBrush(color);
+                RECT dot = {
+                    right - 2,
+                    top - 1,
+                    right + 3,
+                    top + 4
+                };
+                FillRect(dc, &dot, tip);
+                DeleteObject(tip);
+                break;
+            }
+
+            case Tool::Mosaic:
+            {
+                SelectObject(dc, oldBrush);
+                HBRUSH brush = CreateSolidBrush(color);
+
+                const int size = 5;
+                const int gap = 2;
+                for (int row = 0; row < 3; ++row) {
+                    for (int col = 0; col < 3; ++col) {
+                        RECT block = {
+                            left + col * (size + gap),
+                            top + row * (size + gap),
+                            left + col * (size + gap) + size,
+                            top + row * (size + gap) + size
+                        };
+                        FillRect(dc, &block, brush);
+                    }
+                }
+
+                DeleteObject(brush);
+                SelectObject(dc, GetStockObject(NULL_BRUSH));
+                break;
+            }
+            }
+
+            SelectObject(dc, oldBrush);
+            SelectObject(dc, oldPen);
+            DeleteObject(pen);
+        }
+
         void DrawToolbar(HDC dc)
         {
             const std::vector<ToolbarButton> buttons =
                 ToolbarButtons();
-
-            HFONT font = CreateUiFont(16, FW_SEMIBOLD);
-            HGDIOBJ oldFont = SelectObject(dc, font);
-            SetBkMode(dc, TRANSPARENT);
 
             for (const ToolbarButton& button : buttons) {
                 const bool selected =
                     button.action == ButtonAction::Tool &&
                     button.tool == m_activeTool;
 
-                HBRUSH background = CreateSolidBrush(
-                    selected
-                        ? RGB(52, 129, 246)
-                        : RGB(247, 247, 247));
-                HPEN border = CreatePen(
-                    PS_SOLID,
-                    1,
-                    selected
-                        ? RGB(52, 129, 246)
-                        : RGB(180, 180, 180));
-
-                HGDIOBJ oldBrush = SelectObject(dc, background);
-                HGDIOBJ oldPen = SelectObject(dc, border);
-
-                RoundRect(
+                DrawButtonFrame(
                     dc,
-                    button.rect.left,
-                    button.rect.top,
-                    button.rect.right,
-                    button.rect.bottom,
-                    8,
-                    8);
+                    button.rect,
+                    selected,
+                    button.action == ButtonAction::Finish,
+                    button.action == ButtonAction::Cancel);
 
-                SelectObject(dc, oldBrush);
-                SelectObject(dc, oldPen);
-                DeleteObject(background);
-                DeleteObject(border);
-
-                SetTextColor(
-                    dc,
-                    selected
-                        ? RGB(255, 255, 255)
-                        : RGB(35, 35, 35));
-
-                RECT textRect = button.rect;
-                DrawTextW(
-                    dc,
-                    button.text,
-                    -1,
-                    &textRect,
-                    DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                DrawToolbarIcon(dc, button, selected);
             }
-
-            SelectObject(dc, oldFont);
-            DeleteObject(font);
         }
 
         void DrawSelectionFrame(HDC dc, const RECT& selection)
@@ -970,7 +1145,7 @@ namespace
             const wchar_t* message =
                 m_state == CaptureState::Selecting
                     ? L"按住鼠标左键拖动选择截图区域，Esc 或右键取消"
-                    : L"选择工具进行标注，点击“完成”复制到剪贴板";
+                    : L"选择下方图标进行标注，点击勾号复制到剪贴板";
 
             HFONT font = CreateUiFont(20, FW_SEMIBOLD);
             HGDIOBJ oldFont = SelectObject(dc, font);
@@ -1002,7 +1177,6 @@ namespace
             HGDIOBJ oldBufferBitmap =
                 SelectObject(bufferDC, bufferBitmap);
 
-            // Frozen darkened desktop background.
             BitBlt(
                 bufferDC,
                 0,
@@ -1022,7 +1196,6 @@ namespace
             }
 
             if (ValidSelection(visibleSelection)) {
-                // Restore full brightness only inside the selection.
                 BitBlt(
                     bufferDC,
                     visibleSelection.left,
