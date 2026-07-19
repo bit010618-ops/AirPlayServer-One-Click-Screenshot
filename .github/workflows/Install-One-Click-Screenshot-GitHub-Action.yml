@@ -1,0 +1,577 @@
+name: Install one-click clipboard screenshot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply screenshot and Chinese UI changes
+        shell: bash
+        run: |
+          python3 - . <<'PY'
+          #!/usr/bin/env python3
+          """Apply the AirPlayServer clipboard screenshot + Simplified Chinese UI patch.
+          
+          Run from the repository root:
+              python tools/apply_one_click_screenshot.py .
+          
+          The script is intentionally idempotent and stops if the expected upstream
+          source anchors cannot be found, rather than silently producing a broken tree.
+          """
+          from __future__ import annotations
+          
+          import argparse
+          import re
+          import sys
+          from pathlib import Path
+          
+          MARKER = "AIRPLAY_ONE_CLICK_SCREENSHOT_PATCH_V1"
+          
+          
+          def read_text(path: Path) -> str:
+              return path.read_text(encoding="utf-8-sig")
+          
+          
+          def write_text(path: Path, text: str) -> None:
+              # UTF-8 BOM lets Visual Studio/MSVC identify the Chinese source reliably.
+              path.write_text(text, encoding="utf-8-sig", newline="\n")
+          
+          
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f"{label}: expected exactly 1 match, found {count}")
+              return text.replace(old, new, 1)
+          
+          
+          def replace_all_checked(text: str, old: str, new: str, label: str, minimum: int = 1) -> str:
+              count = text.count(old)
+              if count < minimum:
+                  raise RuntimeError(f"{label}: expected at least {minimum} match(es), found {count}")
+              return text.replace(old, new)
+          
+          
+          def regex_once(text: str, pattern: str, repl: str, label: str, flags: int = 0) -> str:
+              result, count = re.subn(pattern, repl, text, count=1, flags=flags)
+              if count != 1:
+                  raise RuntimeError(f"{label}: expected exactly 1 regex match, found {count}")
+              return result
+          
+          
+          def patch_sdl_header(path: Path) -> bool:
+              text = read_text(path)
+              if MARKER in text:
+                  return False
+          
+              pattern = re.compile(r'(?m)^(?P<indent>[ \t]*)void clearSessionVideoFrame\(\);[ \t]*$')
+              match = pattern.search(text)
+              if match is None:
+                  raise RuntimeError("CSDLPlayer.h screenshot method: anchor not found")
+              indent = match.group("indent")
+              replacement = (
+                  f"{indent}void clearSessionVideoFrame();\n"
+                  f"{indent}bool copyCurrentFrameToClipboard(); // Copy the current AirPlay frame without writing a file\n"
+                  f"{indent}// {MARKER}"
+              )
+              text = text[:match.start()] + replacement + text[match.end():]
+              write_text(path, text)
+              return True
+          
+          
+          SCREENSHOT_METHOD = r'''
+          bool CSDLPlayer::copyCurrentFrameToClipboard()
+          {
+              if (m_renderer == NULL || m_videoTexture == NULL || !m_videoTextureHasFrame ||
+                  m_videoWidth <= 0 || m_videoHeight <= 0 || !m_bConnected) {
+                  printf("Clipboard screenshot is unavailable: no active video frame\n");
+                  return false;
+              }
+          
+              int normalizedRotation = m_rotationAngle % 360;
+              if (normalizedRotation < 0) normalizedRotation += 360;
+              const bool quarterTurn = normalizedRotation == 90 || normalizedRotation == 270;
+              const int captureWidth = quarterTurn ? m_videoHeight : m_videoWidth;
+              const int captureHeight = quarterTurn ? m_videoWidth : m_videoHeight;
+              if (captureWidth <= 0 || captureHeight <= 0) return false;
+          
+              SDL_Texture* previousTarget = SDL_GetRenderTarget(m_renderer);
+              Uint8 previousR = 0, previousG = 0, previousB = 0, previousA = 255;
+              SDL_GetRenderDrawColor(m_renderer, &previousR, &previousG, &previousB, &previousA);
+          
+              SDL_Texture* captureTexture = SDL_CreateTexture(
+                  m_renderer,
+                  SDL_PIXELFORMAT_ARGB8888,
+                  SDL_TEXTUREACCESS_TARGET,
+                  captureWidth,
+                  captureHeight);
+              if (captureTexture == NULL) {
+                  printf("Could not create clipboard screenshot texture: %s\n", SDL_GetError());
+                  return false;
+              }
+          
+              bool renderSucceeded = SDL_SetRenderTarget(m_renderer, captureTexture) == 0;
+              if (renderSucceeded) {
+                  SDL_SetRenderDrawColor(m_renderer, 0, 0, 0, 255);
+                  renderSucceeded = SDL_RenderClear(m_renderer) == 0;
+              }
+          
+              SDL_Rect destination = { 0, 0, m_videoWidth, m_videoHeight };
+              if (quarterTurn) {
+                  destination.x = (captureWidth - m_videoWidth) / 2;
+                  destination.y = (captureHeight - m_videoHeight) / 2;
+              }
+          
+              if (renderSucceeded) {
+                  renderSucceeded = SDL_RenderCopyEx(
+                      m_renderer,
+                      m_videoTexture,
+                      NULL,
+                      &destination,
+                      (double)normalizedRotation,
+                      NULL,
+                      SDL_FLIP_NONE) == 0;
+              }
+          
+              const int pitch = captureWidth * 4;
+              std::vector<Uint8> pixels((size_t)pitch * (size_t)captureHeight);
+              if (renderSucceeded) {
+                  renderSucceeded = SDL_RenderReadPixels(
+                      m_renderer,
+                      NULL,
+                      SDL_PIXELFORMAT_BGRA32,
+                      pixels.data(),
+                      pitch) == 0;
+              }
+          
+              SDL_SetRenderTarget(m_renderer, previousTarget);
+              SDL_SetRenderDrawColor(m_renderer, previousR, previousG, previousB, previousA);
+              SDL_DestroyTexture(captureTexture);
+          
+              if (!renderSucceeded) {
+                  printf("Could not read the AirPlay frame for the clipboard: %s\n", SDL_GetError());
+                  return false;
+              }
+          
+              // CF_DIB consumers expect an opaque BGRX/BGRA image. SDL readback may leave
+              // alpha undefined depending on the renderer, so normalize it here.
+              for (size_t i = 3; i < pixels.size(); i += 4) {
+                  pixels[i] = 255;
+              }
+          
+              const SIZE_T imageBytes = (SIZE_T)pitch * (SIZE_T)captureHeight;
+              const SIZE_T allocationBytes = sizeof(BITMAPINFOHEADER) + imageBytes;
+              HGLOBAL dibMemory = GlobalAlloc(GMEM_MOVEABLE, allocationBytes);
+              if (dibMemory == NULL) {
+                  printf("Could not allocate clipboard bitmap memory\n");
+                  return false;
+              }
+          
+              BYTE* dibBytes = (BYTE*)GlobalLock(dibMemory);
+              if (dibBytes == NULL) {
+                  GlobalFree(dibMemory);
+                  return false;
+              }
+          
+              BITMAPINFOHEADER* header = (BITMAPINFOHEADER*)dibBytes;
+              ZeroMemory(header, sizeof(*header));
+              header->biSize = sizeof(BITMAPINFOHEADER);
+              header->biWidth = captureWidth;
+              header->biHeight = captureHeight; // Positive height: bottom-up DIB.
+              header->biPlanes = 1;
+              header->biBitCount = 32;
+              header->biCompression = BI_RGB;
+              header->biSizeImage = (DWORD)imageBytes;
+          
+              BYTE* destinationPixels = dibBytes + sizeof(BITMAPINFOHEADER);
+              for (int y = 0; y < captureHeight; ++y) {
+                  const BYTE* sourceRow = pixels.data() + (size_t)y * (size_t)pitch;
+                  BYTE* destinationRow = destinationPixels +
+                      (size_t)(captureHeight - 1 - y) * (size_t)pitch;
+                  memcpy(destinationRow, sourceRow, (size_t)pitch);
+              }
+              GlobalUnlock(dibMemory);
+          
+              bool clipboardOpened = false;
+              for (int attempt = 0; attempt < 10 && !clipboardOpened; ++attempt) {
+                  clipboardOpened = OpenClipboard(m_hwnd) != FALSE;
+                  if (!clipboardOpened) Sleep(10);
+              }
+              if (!clipboardOpened) {
+                  GlobalFree(dibMemory);
+                  printf("Could not open the Windows clipboard\n");
+                  return false;
+              }
+          
+              if (!EmptyClipboard() || SetClipboardData(CF_DIB, dibMemory) == NULL) {
+                  CloseClipboard();
+                  GlobalFree(dibMemory);
+                  printf("Could not place the screenshot on the Windows clipboard\n");
+                  return false;
+              }
+          
+              // The clipboard owns dibMemory after a successful SetClipboardData call.
+              CloseClipboard();
+              printf("AirPlay frame copied to the Windows clipboard\n");
+              return true;
+          }
+          
+          '''
+          
+          
+          def patch_sdl_cpp(path: Path) -> bool:
+              text = read_text(path)
+              if MARKER in text:
+                  return False
+          
+              if "#include <vector>" not in text:
+                  if "#include <new>" in text:
+                      text = replace_once(text, "#include <new>", "#include <new>\n#include <vector>", "CSDLPlayer.cpp vector include")
+                  else:
+                      text = replace_once(text, '#include "CAutoLock.h"', '#include <vector>\n#include "CAutoLock.h"', "CSDLPlayer.cpp vector include fallback")
+          
+              # Make Ctrl+Shift+C a global shortcut even while ImGui has keyboard focus.
+              text = regex_once(
+                  text,
+                  r'(\s*bool privacyShortcut = key == SDLK_h && m_bConnected &&\s*\n\s*\(modifiers & KMOD_CTRL\) != 0 && \(modifiers & KMOD_SHIFT\) != 0;\s*\n)\s*if \(privacyShortcut\) \{',
+                  r'\1\t\t\tbool screenshotShortcut = key == SDLK_c && m_bConnected &&\n'
+                  r'\t\t\t\t(modifiers & KMOD_CTRL) != 0 && (modifiers & KMOD_SHIFT) != 0 &&\n'
+                  r'\t\t\t\t(modifiers & (KMOD_ALT | KMOD_GUI)) == 0;\n'
+                  r'\t\t\tif (privacyShortcut || screenshotShortcut) {',
+                  "CSDLPlayer.cpp global screenshot shortcut",
+              )
+          
+              # Handle the shortcut in the SDL key-up switch.
+              key_pattern = re.compile(r'(?m)^(?P<indent>[ \t]*)case SDLK_F1: \{')
+              key_match = key_pattern.search(text)
+              if key_match is None:
+                  raise RuntimeError("CSDLPlayer.cpp screenshot key case: anchor not found")
+              indent = key_match.group("indent")
+              inner = indent + "\t"
+              key_case = (
+                  f"{indent}case SDLK_c: {{\n"
+                  f"{inner}bool screenshotShortcut = m_bConnected &&\n"
+                  f"{inner}\t(event.key.keysym.mod & KMOD_CTRL) != 0 &&\n"
+                  f"{inner}\t(event.key.keysym.mod & KMOD_SHIFT) != 0 &&\n"
+                  f"{inner}\t(event.key.keysym.mod & (KMOD_ALT | KMOD_GUI)) == 0;\n"
+                  f"{inner}if (screenshotShortcut) {{\n"
+                  f"{inner}\tMessageBeep(copyCurrentFrameToClipboard() ? MB_OK : MB_ICONERROR);\n"
+                  f"{inner}}}\n"
+                  f"{inner}break;\n"
+                  f"{indent}}}\n"
+              )
+              text = text[:key_match.start()] + key_case + indent + "case SDLK_F1: {" + text[key_match.end():]
+          
+              # Add the UI callback variable and pass it into RenderOverlay.
+              text = regex_once(
+                  text,
+                  r'(?m)^(?P<indent>[ \t]*)bool togglePictureInPicture = false;[ \t]*$',
+                  r'\g<indent>bool togglePictureInPicture = false;\n\g<indent>bool copyScreenshot = false;',
+                  "CSDLPlayer.cpp screenshot UI flag",
+              )
+              text = regex_once(
+                  text,
+                  r'm_bPictureInPicture,\s*&togglePictureInPicture\);',
+                  r'm_bPictureInPicture, &togglePictureInPicture, &copyScreenshot);',
+                  "CSDLPlayer.cpp RenderOverlay screenshot callback",
+              )
+              privacy_pattern = re.compile(r'(?m)^(?P<indent>[ \t]*)if \(toggleCapturePrivacy\) \{')
+              privacy_match = privacy_pattern.search(text)
+              if privacy_match is None:
+                  raise RuntimeError("CSDLPlayer.cpp screenshot UI action: anchor not found")
+              indent = privacy_match.group("indent")
+              insertion = (
+                  f"{indent}if (copyScreenshot) {{\n"
+                  f"{indent}\tMessageBeep(copyCurrentFrameToClipboard() ? MB_OK : MB_ICONERROR);\n"
+                  f"{indent}}}\n"
+                  f"{indent}if (toggleCapturePrivacy) {{"
+              )
+              text = text[:privacy_match.start()] + insertion + text[privacy_match.end():]
+          
+              # Insert implementation before the next related window-capture method.
+              text = replace_once(
+                  text,
+                  "void CSDLPlayer::setCapturePrivacyMode(bool enabled)",
+                  f"// {MARKER}\n" + SCREENSHOT_METHOD + "void CSDLPlayer::setCapturePrivacyMode(bool enabled)",
+                  "CSDLPlayer.cpp screenshot implementation",
+              )
+          
+              write_text(path, text)
+              return True
+          
+          
+          def patch_imgui_header(path: Path) -> bool:
+              text = read_text(path)
+              if MARKER in text:
+                  return False
+          
+              text = regex_once(
+                  text,
+                  r'(bool pictureInPictureActive = false, bool\* pTogglePictureInPicture = NULL)\);',
+                  r'\1,\n\t\tbool* pCopyScreenshot = NULL);\n\t// ' + MARKER,
+                  "CImGuiManager.h callback parameter",
+              )
+              write_text(path, text)
+              return True
+          
+          
+          def patch_imgui_cpp(path: Path) -> bool:
+              text = read_text(path)
+              if MARKER in text:
+                  return False
+          
+              # Load Simplified Chinese glyphs and prefer Windows' built-in CJK fonts.
+              text = replace_once(
+                  text,
+                  "return io.Fonts->AddFontFromFileTTF(path, size, &config, NULL);",
+                  "return io.Fonts->AddFontFromFileTTF(path, size, &config,\n"
+                  "\t\tio.Fonts->GetGlyphRangesChineseSimplifiedCommon());",
+                  "CImGuiManager.cpp Chinese glyph range",
+              )
+          
+              font_block_pattern = re.compile(
+                  r'const char\* bodyPaths\[\] = \{.*?m_pFontMono = LoadUiFont\(io, FindFirstFont\(monoPaths, 2\), 13\.0f \* m_dpiScale\);',
+                  re.S,
+              )
+              font_block_replacement = r'''const char* bodyPaths[] = {
+          		"C:\\Windows\\Fonts\\msyh.ttc",
+          		"C:\\Windows\\Fonts\\simsun.ttc",
+          		"C:\\Windows\\Fonts\\simhei.ttf",
+          		"C:\\Windows\\Fonts\\SegUIVar.ttf",
+          		"C:\\Windows\\Fonts\\segoeui.ttf"
+          	};
+          	const char* emphasisPaths[] = {
+          		"C:\\Windows\\Fonts\\msyhbd.ttc",
+          		"C:\\Windows\\Fonts\\msyh.ttc",
+          		"C:\\Windows\\Fonts\\seguisb.ttf",
+          		"C:\\Windows\\Fonts\\segoeuib.ttf"
+          	};
+          	const char* titlePaths[] = {
+          		"C:\\Windows\\Fonts\\msyhbd.ttc",
+          		"C:\\Windows\\Fonts\\msyh.ttc",
+          		"C:\\Windows\\Fonts\\segoeuib.ttf",
+          		"C:\\Windows\\Fonts\\seguisb.ttf"
+          	};
+          	const char* monoPaths[] = {
+          		"C:\\Windows\\Fonts\\CascadiaMono.ttf",
+          		"C:\\Windows\\Fonts\\consola.ttf",
+          		"C:\\Windows\\Fonts\\msyh.ttc"
+          	};
+          	m_pFontBody = LoadUiFont(io, FindFirstFont(bodyPaths, 5), 15.0f * m_dpiScale);
+          	if (m_pFontBody == NULL) {
+          		ImFontConfig defaultConfig;
+          		defaultConfig.SizePixels = 15.0f * m_dpiScale;
+          		m_pFontBody = io.Fonts->AddFontDefault(&defaultConfig);
+          	}
+          	m_pFontHeading = LoadUiFont(io, FindFirstFont(emphasisPaths, 4), 17.0f * m_dpiScale);
+          	m_pFontTitle = LoadUiFont(io, FindFirstFont(titlePaths, 4), 25.0f * m_dpiScale);
+          	m_pFontPin = LoadUiFont(io, FindFirstFont(titlePaths, 4), 52.0f * m_dpiScale);
+          	m_pFontMono = LoadUiFont(io, FindFirstFont(monoPaths, 3), 13.0f * m_dpiScale);'''
+              text, count = font_block_pattern.subn(font_block_replacement, text, count=1)
+              if count != 1:
+                  raise RuntimeError(f"CImGuiManager.cpp Chinese font block: expected 1 match, found {count}")
+          
+              # Extend RenderOverlay with a screenshot callback.
+              text = regex_once(
+                  text,
+                  r'(bool pictureInPictureActive, bool\* pTogglePictureInPicture)\)',
+                  r'\1, bool* pCopyScreenshot)',
+                  "CImGuiManager.cpp callback signature",
+              )
+              callback_pattern = re.compile(
+                  r'(?m)^(?P<indent>[ \t]*)if \(pTogglePictureInPicture != NULL\) \*pTogglePictureInPicture = false;[ \t]*$'
+              )
+              callback_match = callback_pattern.search(text)
+              if callback_match is None:
+                  raise RuntimeError("CImGuiManager.cpp callback initialization: anchor not found")
+              indent = callback_match.group("indent")
+              callback_replacement = (
+                  f"{indent}if (pTogglePictureInPicture != NULL) *pTogglePictureInPicture = false;\n"
+                  f"{indent}if (pCopyScreenshot != NULL) *pCopyScreenshot = false;\n"
+                  f"{indent}// {MARKER}"
+              )
+              text = text[:callback_match.start()] + callback_replacement + text[callback_match.end():]
+          
+              # Put the screenshot action immediately after the rotate/reset row.
+              button_pattern = re.compile(
+                  r'(?m)^(?P<indent>[ \t]*)if \(ImGui::Button\(pictureInPictureActive \? "Exit picture in picture##PictureInPicture"'
+              )
+              button_match = button_pattern.search(text)
+              if button_match is None:
+                  raise RuntimeError("CImGuiManager.cpp screenshot button: anchor not found")
+              indent = button_match.group("indent")
+              inner = indent + "\t"
+              screenshot_button = (
+                  f'{indent}if (ImGui::Button(u8"复制截图##CopyScreenshot", ImVec2(-1.0f, 34.0f * scale))) {{\n'
+                  f"{inner}if (pCopyScreenshot != NULL) *pCopyScreenshot = true;\n"
+                  f"{indent}}}\n"
+                  f'{indent}ShowTooltip(u8"复制当前投屏画面到剪贴板（Ctrl+Shift+C）");\n\n'
+              )
+              text = text[:button_match.start()] + screenshot_button + text[button_match.start():]
+          
+              # Major Simplified Chinese UI strings. Internal IDs after ## remain stable.
+              translations = {
+                  '"Settings##HomeSettings"': 'u8"设置##HomeSettings"',
+                  '"Receiver and security settings"': 'u8"接收器与安全设置"',
+                  '"Ready"': 'u8"就绪"',
+                  '"Offline"': 'u8"离线"',
+                  '"Waiting for a device"': 'u8"等待设备连接"',
+                  '"Receiver unavailable"': 'u8"接收器不可用"',
+                  '"Open Screen Mirroring on your Apple device and choose the receiver below."': 'u8"在 Apple 设备上打开“屏幕镜像”，然后选择下方接收器。"',
+                  '"Check that Bonjour is available, then restart the receiver."': 'u8"请确认 Bonjour 服务可用，然后重启接收器。"',
+                  '"Settings"': 'u8"设置"',
+                  '"Receiver name"': 'u8"接收器名称"',
+                  '"Shown in Screen Mirroring.\\nChanges apply automatically when disconnected."': 'u8"该名称会显示在“屏幕镜像”列表中。\\n断开连接后自动应用更改。"',
+                  '"Security"': 'u8"安全"',
+                  '"Close"': 'u8"关闭"',
+                  '"Require PIN"': 'u8"需要 PIN"',
+                  '"Ask for approval before showing a 4-digit PIN for a new connection"': 'u8"新设备连接时先请求允许，再显示 4 位 PIN"',
+                  '"New connections need your approval.\\nThe PIN is generated for this app session only."': 'u8"新连接需要获得允许。\\nPIN 仅在本次程序运行期间有效。"',
+                  '"Hide PIN from screen capture"': 'u8"截图或录屏时隐藏 PIN"',
+                  '"Exclude the receiver window from recording before showing the PIN locally"': 'u8"本机显示 PIN 前，先让录屏软件无法捕获此窗口"',
+                  '"Off - devices on your network can connect."': 'u8"已关闭——同一网络中的设备可以直接连接。"',
+                  '"AirPlay connection request##PinApproval"': 'u8"AirPlay 连接请求##PinApproval"',
+                  '"Allow this AirPlay connection?"': 'u8"允许这次 AirPlay 连接吗？"',
+                  '"A nearby Apple device wants to connect."': 'u8"附近的 Apple 设备正在请求连接。"',
+                  '"From %s"': 'u8"来源：%s"',
+                  '"Allow it to reveal a 4-digit PIN."': 'u8"允许后将显示一个 4 位 PIN。"',
+                  '"Deny"': 'u8"拒绝"',
+                  '"Allow"': 'u8"允许"',
+                  '"PIN kept private"': 'u8"PIN 已保持私密"',
+                  '"Windows could not exclude this window from screen capture, so the PIN was not shown."': 'u8"Windows 无法阻止录屏软件捕获此窗口，因此没有显示 PIN。"',
+                  '"Cancel connection"': 'u8"取消连接"',
+                  '"Connection approved"': 'u8"已允许连接"',
+                  '"Enter this PIN on your Apple device:"': 'u8"请在 Apple 设备上输入此 PIN："',
+                  '"Cancel"': 'u8"取消"',
+                  '"Show controls"': 'u8"显示控制栏"',
+                  '"Open session controls (H)"': 'u8"打开投屏控制栏（H）"',
+                  '"Hide launcher; press H to show controls"': 'u8"隐藏入口；按 H 可重新显示控制栏"',
+                  '"AirPlay session"': 'u8"AirPlay 投屏"',
+                  '"Sender: %s\\nReceiver: %s"': 'u8"发送设备：%s\\n接收器：%s"',
+                  '"Collapse controls"': 'u8"收起控制栏"',
+                  '"%llu of %llu frames dropped"': 'u8"丢帧：%llu / %llu"',
+                  '"View"': 'u8"画面"',
+                  '"Rotate 90##RotateView"': 'u8"旋转 90°##RotateView"',
+                  '"Rotate the stream clockwise (R)"': 'u8"顺时针旋转投屏画面（R）"',
+                  '"Reset view##ResetView"': 'u8"重置画面##ResetView"',
+                  '"Return to fit-to-window at 0 degrees"': 'u8"恢复为 0° 并适应窗口"',
+                  '"Exit picture in picture##PictureInPicture"': 'u8"退出画中画##PictureInPicture"',
+                  '"Picture in picture##PictureInPicture"': 'u8"画中画##PictureInPicture"',
+                  '"Restore the normal receiver window (P)"': 'u8"恢复普通接收窗口（P）"',
+                  '"Keep a compact video window above other apps (P)"': 'u8"让小型投屏窗口置于其他应用上方（P）"',
+                  '"Show in captures##CapturePrivacy"': 'u8"允许被录制##CapturePrivacy"',
+                  '"Hide from captures##CapturePrivacy"': 'u8"从录屏中隐藏##CapturePrivacy"',
+                  '"Allow recording software to see the receiver again"': 'u8"重新允许录屏软件捕获接收器窗口"',
+                  '"Keep the receiver visible locally, exclude it from capture, and black the clean feed"': 'u8"本机仍可见，但录屏软件无法捕获，纯净输出会变黑"',
+                  '"Windows capture exclusion is unavailable."': 'u8"当前 Windows 不支持录屏排除。"',
+                  '"Screen Cast"': 'u8"投屏输出"',
+                  '"Enable Screen Cast mode"': 'u8"启用投屏输出模式"',
+                  '"Stream disconnected"': 'u8"投屏已断开"',
+                  '"Waiting for another device"': 'u8"等待其他设备连接"',
+              }
+              for old, new in translations.items():
+                  # Some optional strings differ slightly across upstream revisions.
+                  if old in text:
+                      text = text.replace(old, new)
+          
+              write_text(path, text)
+              return True
+          
+          
+          def append_readme(path: Path) -> bool:
+              text = read_text(path)
+              if "## 中文增强版：一键复制截图" in text:
+                  return False
+              section = r'''
+          
+          ## 中文增强版：一键复制截图
+          
+          本 Fork 基于 `xenos1337/AirPlayServer`，保留原项目 MIT License，并增加：
+          
+          - **复制截图按钮**：复制当前 AirPlay 视频画面到 Windows 剪贴板。
+          - **快捷键 `Ctrl+Shift+C`**：无需保存文件，截图后可直接在微信、QQ、Word、OneNote、画图等软件中按 `Ctrl+V` 粘贴。
+          - **干净截图**：只复制 AirPlay 视频帧，不包含软件控制栏、窗口边框和黑边。
+          - **旋转支持**：截图会应用当前的 0°/90°/180°/270° 旋转。
+          - **简体中文界面**：主页、设置、连接审批和主要投屏控制已汉化。
+          
+          ### 使用
+          
+          1. 启动 AirPlayServer 并连接 iPhone、iPad 或 Mac。
+          2. 点击投屏控制栏中的 **复制截图**，或按 **`Ctrl+Shift+C`**。
+          3. 切换到目标软件，按 **`Ctrl+V`**。
+          
+          截图仅进入系统剪贴板，程序不会生成 PNG/JPG，也不会写入临时图片文件。
+          '''
+              write_text(path, text.rstrip() + section + "\n")
+              return True
+          
+          
+          def main() -> int:
+              parser = argparse.ArgumentParser()
+              parser.add_argument("root", nargs="?", default=".", help="AirPlayServer repository root")
+              args = parser.parse_args()
+              root = Path(args.root).resolve()
+          
+              files = {
+                  "sdl_h": root / "AirPlayServer" / "CSDLPlayer.h",
+                  "sdl_cpp": root / "AirPlayServer" / "CSDLPlayer.cpp",
+                  "imgui_h": root / "AirPlayServer" / "CImGuiManager.h",
+                  "imgui_cpp": root / "AirPlayServer" / "CImGuiManager.cpp",
+                  "readme": root / "README.md",
+              }
+              missing = [str(path) for path in files.values() if not path.exists()]
+              if missing:
+                  print("Repository layout does not match the expected AirPlayServer fork:", file=sys.stderr)
+                  for item in missing:
+                      print(f"  missing: {item}", file=sys.stderr)
+                  return 2
+          
+              originals = {name: path.read_bytes() for name, path in files.items()}
+              try:
+                  changed = []
+                  if patch_sdl_header(files["sdl_h"]): changed.append(str(files["sdl_h"].relative_to(root)))
+                  if patch_sdl_cpp(files["sdl_cpp"]): changed.append(str(files["sdl_cpp"].relative_to(root)))
+                  if patch_imgui_header(files["imgui_h"]): changed.append(str(files["imgui_h"].relative_to(root)))
+                  if patch_imgui_cpp(files["imgui_cpp"]): changed.append(str(files["imgui_cpp"].relative_to(root)))
+                  if append_readme(files["readme"]): changed.append(str(files["readme"].relative_to(root)))
+              except RuntimeError as exc:
+                  for name, path in files.items():
+                      path.write_bytes(originals[name])
+                  print(f"Patch stopped safely and all files were restored: {exc}", file=sys.stderr)
+                  return 3
+          
+              if changed:
+                  print("Patch applied successfully:")
+                  for item in changed:
+                      print(f"  modified: {item}")
+              else:
+                  print("Patch is already applied; no files changed.")
+              return 0
+          
+          
+          if __name__ == "__main__":
+              raise SystemExit(main())
+          PY
+
+      - name: Commit changes
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add AirPlayServer/CSDLPlayer.cpp AirPlayServer/CSDLPlayer.h \
+                  AirPlayServer/CImGuiManager.cpp AirPlayServer/CImGuiManager.h README.md
+          git commit -m "Add one-click clipboard screenshot and Chinese UI"
+          git push
