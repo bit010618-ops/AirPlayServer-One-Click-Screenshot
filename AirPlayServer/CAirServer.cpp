@@ -1,4 +1,4 @@
-#include "CAirServer.h"
+﻿#include "CAirServer.h"
 #include "CSDLPlayer.h"
 #include "CAirServerCallback.h"
 
@@ -80,3 +80,4 @@ float CAirServer::setVideoScale(float fRatio)
 {
     return fgServerScale(m_pServer, fRatio);
 }
+

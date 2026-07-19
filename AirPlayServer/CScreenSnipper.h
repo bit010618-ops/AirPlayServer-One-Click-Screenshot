@@ -1,11 +1,10 @@
 ﻿#pragma once
 
-// Starts the screenshot service and registers Ctrl+Shift+C globally.
+// 初始化区域截图服务，并注册全局快捷键 Ctrl+Shift+C。
 bool ScreenSnipperInitialize();
 
-// Stops the screenshot service.
+// 关闭区域截图服务。
 void ScreenSnipperShutdown();
 
-// Opens the free rectangular desktop selection overlay.
-// The selected image is copied to the Windows clipboard only.
+// 启动区域截图。完成后直接复制到剪贴板，不保存文件。
 void ScreenSnipperStartCapture();

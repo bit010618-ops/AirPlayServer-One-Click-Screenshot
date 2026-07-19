@@ -1,4 +1,4 @@
-#include "CImGuiManager.h"
+﻿#include "CImGuiManager.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "imgui_impl_sdl2.h"
@@ -576,13 +576,13 @@ void CImGuiManager::RenderHomeScreen(const char* deviceName, bool isServerRunnin
 	float settingsButtonHeight = 34.0f * scale;
 	ImGui::SetCursorPos(ImVec2(screenW - margin - settingsButtonWidth, top));
 	ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f * scale);
-	if (ImGui::Button("Settings##HomeSettings",
+	if (ImGui::Button(u8"设置##HomeSettings",
 		ImVec2(settingsButtonWidth, settingsButtonHeight))) {
-		ImGui::OpenPopup("Settings##HomeSettings");
+		ImGui::OpenPopup(u8"设置##HomeSettings");
 	}
 	ImGui::PopStyleVar();
 	ShowTooltip("Receiver and security settings");
-	const char* statusLabel = isServerRunning ? "Ready" : "Offline";
+	const char* statusLabel = isServerRunning ? u8"已就绪" : "Offline";
 	ImGui::SetCursorPos(ImVec2(contentX + 50.0f * scale, top + 8.0f * scale));
 	DrawStatusLine(statusLabel, isServerRunning ? UI_SUCCESS : UI_ERROR, scale);
 
@@ -669,10 +669,10 @@ void CImGuiManager::RenderRequirePinSetting(float contentWidth, float scale)
 		pinToggleMin.y + (pinToggleHeight - pinLabelHeight) * 0.5f);
 	if (m_pFontBody != NULL) {
 		securityDrawList->AddText(m_pFontBody, m_pFontBody->LegacySize, pinLabelPos,
-			ImGui::ColorConvertFloat4ToU32(UI_TEXT_PRIMARY), "Require PIN");
+			ImGui::ColorConvertFloat4ToU32(UI_TEXT_PRIMARY), u8"需要 PIN 验证");
 	} else {
 		securityDrawList->AddText(pinLabelPos, ImGui::ColorConvertFloat4ToU32(UI_TEXT_PRIMARY),
-			"Require PIN");
+			u8"需要 PIN 验证");
 	}
 	ShowTooltip("Ask for approval before showing a 4-digit PIN for a new connection");
 	float pinToggleBottom = ImGui::GetItemRectMax().y - ImGui::GetWindowPos().y;
@@ -690,7 +690,7 @@ void CImGuiManager::RenderRequirePinSetting(float contentWidth, float scale)
 			"Warning: PIN approval is unreliable with MacBooks/macOS.");
 		ImGui::PopTextWrapPos();
 		ImGui::SetCursorPosX(contentX);
-		if (ImGui::Checkbox("Hide PIN from screen capture", &m_protectPinFromCapture)) {
+		if (ImGui::Checkbox(u8"截图时隐藏 PIN", &m_protectPinFromCapture)) {
 			// Persisted with the other security settings on shutdown.
 		}
 		ShowTooltip("Exclude the receiver window from recording before showing the PIN locally");
@@ -702,7 +702,7 @@ void CImGuiManager::RenderRequirePinSetting(float contentWidth, float scale)
 
 void CImGuiManager::RenderSettingsPopup()
 {
-	if (ImGui::IsPopupOpen("Settings##HomeSettings")) {
+	if (ImGui::IsPopupOpen(u8"设置##HomeSettings")) {
 		ImGuiViewport* viewport = ImGui::GetMainViewport();
 		if (viewport != NULL) {
 			ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing,
@@ -710,16 +710,16 @@ void CImGuiManager::RenderSettingsPopup()
 		}
 		ImGui::SetNextWindowSize(ImVec2(460.0f * m_dpiScale, 0.0f), ImGuiCond_Appearing);
 	}
-	if (!ImGui::BeginPopupModal("Settings##HomeSettings", NULL,
+	if (!ImGui::BeginPopupModal(u8"设置##HomeSettings", NULL,
 		ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse)) {
 		return;
 	}
 
 	if (m_pFontHeading != NULL) ImGui::PushFont(m_pFontHeading);
-	ImGui::TextColored(UI_TEXT_PRIMARY, "Settings");
+	ImGui::TextColored(UI_TEXT_PRIMARY, u8"设置");
 	if (m_pFontHeading != NULL) ImGui::PopFont();
 	ImGui::Spacing();
-	ImGui::TextColored(UI_TEXT_SECONDARY, "Receiver name");
+	ImGui::TextColored(UI_TEXT_SECONDARY, u8"接收器名称");
 	ImGui::PushItemWidth(-1.0f);
 	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
 		ImVec2(10.0f * m_dpiScale, 11.0f * m_dpiScale));
@@ -736,11 +736,11 @@ void CImGuiManager::RenderSettingsPopup()
 	ImGui::Spacing();
 	ImGui::Separator();
 	ImGui::Spacing();
-	ImGui::TextColored(UI_TEXT_SECONDARY, "Security");
+	ImGui::TextColored(UI_TEXT_SECONDARY, u8"安全");
 	RenderRequirePinSetting(ImGui::GetContentRegionAvail().x, m_dpiScale);
 
 	ImGui::Spacing();
-	if (ImGui::Button("Close", ImVec2(-1.0f, 0.0f))) {
+	if (ImGui::Button(u8"关闭", ImVec2(-1.0f, 0.0f))) {
 		m_bEditingDeviceName = false;
 		ImGui::CloseCurrentPopup();
 	}
@@ -815,7 +815,7 @@ EPinApprovalResult CImGuiManager::RenderPinApprovalPopup(const char* remoteAddre
 		ImGui::PushStyleColor(ImGuiCol_Button, UI_DENY_BUTTON);
 		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, UI_DENY_BUTTON_HOVER);
 		ImGui::PushStyleColor(ImGuiCol_ButtonActive, UI_DENY_BUTTON_ACTIVE);
-		if (ImGui::Button("Deny", ImVec2(buttonWidth, buttonHeight))) {
+		if (ImGui::Button(u8"拒绝", ImVec2(buttonWidth, buttonHeight))) {
 			ImGui::CloseCurrentPopup();
 			result = PIN_APPROVAL_DENY;
 		}
@@ -825,7 +825,7 @@ EPinApprovalResult CImGuiManager::RenderPinApprovalPopup(const char* remoteAddre
 		ImGui::PushStyleColor(ImGuiCol_Button, UI_ALLOW_BUTTON);
 		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, UI_ALLOW_BUTTON_HOVER);
 		ImGui::PushStyleColor(ImGuiCol_ButtonActive, UI_ALLOW_BUTTON_ACTIVE);
-		if (ImGui::Button("Allow", ImVec2(buttonWidth, buttonHeight))) {
+		if (ImGui::Button(u8"允许", ImVec2(buttonWidth, buttonHeight))) {
 			result = PIN_APPROVAL_ALLOW;
 		}
 		ImGui::PopStyleColor(3);
@@ -853,7 +853,7 @@ EPinApprovalResult CImGuiManager::RenderPinApprovalPopup(const char* remoteAddre
 		ImGui::CloseCurrentPopup();
 	} else {
 		if (m_pFontHeading != NULL) ImGui::PushFont(m_pFontHeading);
-		ImGui::TextColored(UI_SUCCESS, "Connection approved");
+		ImGui::TextColored(UI_SUCCESS, u8"已允许连接");
 		if (m_pFontHeading != NULL) ImGui::PopFont();
 		ImGui::Spacing();
 		ImGui::TextColored(UI_TEXT_SECONDARY,
@@ -870,7 +870,7 @@ EPinApprovalResult CImGuiManager::RenderPinApprovalPopup(const char* remoteAddre
 		float buttonHeight = 40.0f * m_dpiScale;
 		float buttonY = ImGui::GetWindowHeight() - style.WindowPadding.y - buttonHeight;
 		ImGui::SetCursorPosY(buttonY);
-		if (ImGui::Button("Cancel", ImVec2(-1.0f, buttonHeight))) {
+		if (ImGui::Button(u8"取消", ImVec2(-1.0f, buttonHeight))) {
 			ImGui::CloseCurrentPopup();
 			result = PIN_APPROVAL_DISMISS;
 		}
@@ -947,10 +947,10 @@ void CImGuiManager::RenderOverlay(const char* deviceName, bool isConnected, cons
 		drawList->AddCircleFilled(ImVec2(buttonPos.x + 12.0f * scale,
 			buttonPos.y + buttonSize.y * 0.5f), 3.0f * scale,
 			ImGui::ColorConvertFloat4ToU32(UI_SUCCESS));
-		ImVec2 labelSize = ImGui::CalcTextSize("Show controls");
+		ImVec2 labelSize = ImGui::CalcTextSize(u8"显示控制栏");
 		drawList->AddText(ImVec2(buttonPos.x + 24.0f * scale,
 			buttonPos.y + (buttonSize.y - labelSize.y) * 0.5f),
-			ImGui::ColorConvertFloat4ToU32(UI_TEXT_PRIMARY), "Show controls");
+			ImGui::ColorConvertFloat4ToU32(UI_TEXT_PRIMARY), u8"显示控制栏");
 		ShowTooltip("Open session controls (H)");
 		ImGui::SameLine(0.0f, 0.0f);
 		if (DrawCloseButton("##DismissOverlayLauncher", dismissSize, scale)) {
@@ -1135,7 +1135,7 @@ void CImGuiManager::RenderOverlay(const char* deviceName, bool isConnected, cons
 
 	ImGui::Dummy(ImVec2(0.0f, 2.0f * scale));
 	ImGui::Separator();
-	ImGui::TextColored(UI_TEXT_PRIMARY, "Quality");
+	ImGui::TextColored(UI_TEXT_PRIMARY, u8"画质");
 	const char* qualityLabels[3] = {
 		"30 fps / Best", "60 fps / Balanced", "60 fps / Low latency"
 	};
@@ -1152,7 +1152,7 @@ void CImGuiManager::RenderOverlay(const char* deviceName, bool isConnected, cons
 	int inputPct = (int)(Clamp01(m_currentAudioLevel) * 100.0f + 0.5f);
 	char audioLevels[48];
 	snprintf(audioLevels, sizeof(audioLevels), "Sender %d%%  Input %d%%", senderPct, inputPct);
-	ImGui::TextColored(UI_TEXT_PRIMARY, "Audio");
+	ImGui::TextColored(UI_TEXT_PRIMARY, u8"音频");
 	float audioLevelsWidth = ImGui::CalcTextSize(audioLevels).x;
 	ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - audioLevelsWidth);
 	ImGui::TextColored(UI_TEXT_MUTED, "%s", audioLevels);
@@ -1378,9 +1378,9 @@ void CImGuiManager::RenderPerfGraphs(const SPerfData& perf, bool* pOpen)
 		DrawMetricPair("Display", displayFps, m_pFontMono);
 		ImGui::TableNextRow();
 		DrawMetricPair("Frame", frameTime, m_pFontMono);
-		DrawMetricPair("Latency", latency, m_pFontMono);
+		DrawMetricPair(u8"延迟", latency, m_pFontMono);
 		ImGui::TableNextRow();
-		DrawMetricPair("Bitrate", bitrate, m_pFontMono);
+		DrawMetricPair(u8"码率", bitrate, m_pFontMono);
 		DrawMetricPair("Buffer", audioQueue, m_pFontMono);
 		ImGui::EndTable();
 	}
@@ -1395,7 +1395,7 @@ void CImGuiManager::RenderPerfGraphs(const SPerfData& perf, bool* pOpen)
 			perf.historySize, perf.currentIdx, 0.0f, 33.0f,
 			UI_ACCENT, 16.67f, m_pFontMono, scale);
 		ImGui::TableNextColumn();
-		DrawPerfChart("Bitrate", NULL, "50", perf.bitrateHistory,
+		DrawPerfChart(u8"码率", NULL, "50", perf.bitrateHistory,
 			perf.historySize, perf.currentIdx, 0.0f, 50.0f,
 			UI_ACCENT, -1.0f, m_pFontMono, scale);
 		ImGui::EndTable();
@@ -1404,11 +1404,11 @@ void CImGuiManager::RenderPerfGraphs(const SPerfData& perf, bool* pOpen)
 		if (ImGui::BeginTable("##SecondaryCharts", 2,
 			ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoSavedSettings)) {
 			ImGui::TableNextColumn();
-			DrawPerfChart("Source FPS", NULL, "80", perf.sourceFpsHistory,
+			DrawPerfChart(u8"源帧率", NULL, "80", perf.sourceFpsHistory,
 				perf.historySize, perf.currentIdx, 0.0f, 80.0f,
 				UI_ACCENT, -1.0f, m_pFontMono, scale);
 			ImGui::TableNextColumn();
-			DrawPerfChart("Display FPS", NULL, "80", perf.displayFpsHistory,
+			DrawPerfChart(u8"显示帧率", NULL, "80", perf.displayFpsHistory,
 				perf.historySize, perf.currentIdx, 0.0f, 80.0f,
 				UI_ACCENT, perf.targetFps, m_pFontMono, scale);
 			ImGui::TableNextColumn();
@@ -1471,10 +1471,10 @@ void CImGuiManager::RenderPerfGraphs(const SPerfData& perf, bool* pOpen)
 		ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoSavedSettings)) {
 		ImGui::TableSetupColumn("Metric", ImGuiTableColumnFlags_WidthFixed, 90.0f * scale);
 		ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-		DrawStatRow("Video", videoInfo, m_pFontMono);
+		DrawStatRow(u8"视频", videoInfo, m_pFontMono);
 		DrawStatRow("Transferred", dataInfo, m_pFontMono);
 		DrawStatRow("Frames", frameInfo, m_pFontMono);
-		DrawStatRow("Audio", audioInfo, m_pFontMono);
+		DrawStatRow(u8"音频", audioInfo, m_pFontMono);
 		DrawStatRow("Uptime", uptime, m_pFontMono);
 		ImGui::EndTable();
 	}
@@ -1648,33 +1648,33 @@ void CImGuiManager::LoadSettings(const char* iniPath)
 {
 	// Load device name
 	char buf[256] = { 0 };
-	GetPrivateProfileStringA("General", "DeviceName", "", buf, sizeof(buf), iniPath);
+	GetPrivateProfileStringA(u8"常规", "DeviceName", "", buf, sizeof(buf), iniPath);
 	if (strlen(buf) > 0) {
 		strncpy_s(m_deviceNameBuffer, sizeof(m_deviceNameBuffer), buf, _TRUNCATE);
 	}
 
 	// Load quality preset
-	int preset = GetPrivateProfileIntA("General", "QualityPreset", 1, iniPath);
+	int preset = GetPrivateProfileIntA(u8"常规", "QualityPreset", 1, iniPath);
 	if (preset >= QUALITY_GOOD && preset <= QUALITY_FAST) {
 		m_qualityPreset = (EQualityPreset)preset;
 	}
 
 	// Screen-cast defaults preserve the existing receiver behavior until enabled.
-	m_screenCastEnabled = GetPrivateProfileIntA("ScreenCast", "Enabled", 0, iniPath) != 0;
+	m_screenCastEnabled = GetPrivateProfileIntA("ScreenCast", u8"已启用", 0, iniPath) != 0;
 	m_screenCastHideInterface = GetPrivateProfileIntA("ScreenCast", "HideInterface", 1, iniPath) != 0;
 	m_screenCastCropToVideo = GetPrivateProfileIntA("ScreenCast", "CropToVideo", 1, iniPath) != 0;
 
 	// Secure-by-default: the toggle is the only persisted PIN setting. The
 	// temporary four-digit PIN is generated in memory by the receiver.
-	m_airPlayPinEnabled = GetPrivateProfileIntA("Security", "RequirePin", 1, iniPath) != 0;
-	m_protectPinFromCapture = GetPrivateProfileIntA("Security", "HidePin", 1, iniPath) != 0;
+	m_airPlayPinEnabled = GetPrivateProfileIntA(u8"安全", "RequirePin", 1, iniPath) != 0;
+	m_protectPinFromCapture = GetPrivateProfileIntA(u8"安全", "HidePin", 1, iniPath) != 0;
 
 	// Load the three-state overlay setting. Preserve an explicit legacy hidden
 	// choice; only a missing legacy key uses the discoverable launcher default.
 	char legacyOverlay[16] = { 0 };
-	GetPrivateProfileStringA("General", "ShowOverlay", "",
+	GetPrivateProfileStringA(u8"常规", "ShowOverlay", "",
 		legacyOverlay, sizeof(legacyOverlay), iniPath);
-	int overlayState = GetPrivateProfileIntA("General", "OverlayState", -1, iniPath);
+	int overlayState = GetPrivateProfileIntA(u8"常规", "OverlayState", -1, iniPath);
 	if (overlayState >= OVERLAY_EXPANDED && overlayState <= OVERLAY_HIDDEN) {
 		m_overlayState = (EOverlayState)overlayState;
 		// If an older build ran later, it could only update ShowOverlay. A mismatch
@@ -1696,11 +1696,11 @@ void CImGuiManager::LoadSettings(const char* iniPath)
 	}
 
 	// Load auto-adjust
-	int autoAdj = GetPrivateProfileIntA("Audio", "AutoAdjust", 0, iniPath);
+	int autoAdj = GetPrivateProfileIntA(u8"音频", "AutoAdjust", 0, iniPath);
 	m_bAutoAdjust = (autoAdj != 0);
 
 	// Load local volume (stored as 0-100 integer)
-	int localVol = GetPrivateProfileIntA("Audio", "LocalVolume", 100, iniPath);
+	int localVol = GetPrivateProfileIntA(u8"音频", "LocalVolume", 100, iniPath);
 	if (localVol < 0) localVol = 0;
 	if (localVol > 100) localVol = 100;
 	m_localVolume = localVol / 100.0f;
@@ -1709,22 +1709,22 @@ void CImGuiManager::LoadSettings(const char* iniPath)
 void CImGuiManager::SaveSettings(const char* iniPath)
 {
 	// Save device name
-	WritePrivateProfileStringA("General", "DeviceName",
+	WritePrivateProfileStringA(u8"常规", "DeviceName",
 		m_deviceNameBuffer[0] ? m_deviceNameBuffer : "", iniPath);
 
-	WritePrivateProfileStringA("Security", "RequirePin",
+	WritePrivateProfileStringA(u8"安全", "RequirePin",
 		m_airPlayPinEnabled ? "1" : "0", iniPath);
-	WritePrivateProfileStringA("Security", "HidePin",
+	WritePrivateProfileStringA(u8"安全", "HidePin",
 		m_protectPinFromCapture ? "1" : "0", iniPath);
 	// Remove the old persistent custom-PIN value when a new build saves settings.
-	WritePrivateProfileStringA("Security", "PinProtected", NULL, iniPath);
+	WritePrivateProfileStringA(u8"安全", "PinProtected", NULL, iniPath);
 
 	// Save quality preset
 	char buf[16];
 	sprintf_s(buf, sizeof(buf), "%d", (int)m_qualityPreset);
-	WritePrivateProfileStringA("General", "QualityPreset", buf, iniPath);
+	WritePrivateProfileStringA(u8"常规", "QualityPreset", buf, iniPath);
 
-	WritePrivateProfileStringA("ScreenCast", "Enabled",
+	WritePrivateProfileStringA("ScreenCast", u8"已启用",
 		m_screenCastEnabled ? "1" : "0", iniPath);
 	WritePrivateProfileStringA("ScreenCast", "HideInterface",
 		m_screenCastHideInterface ? "1" : "0", iniPath);
@@ -1733,15 +1733,16 @@ void CImGuiManager::SaveSettings(const char* iniPath)
 
 	// Save the explicit overlay state. Keep the legacy boolean for older builds.
 	sprintf_s(buf, sizeof(buf), "%d", (int)m_overlayState);
-	WritePrivateProfileStringA("General", "OverlayState", buf, iniPath);
-	WritePrivateProfileStringA("General", "ShowOverlay",
+	WritePrivateProfileStringA(u8"常规", "OverlayState", buf, iniPath);
+	WritePrivateProfileStringA(u8"常规", "ShowOverlay",
 		m_overlayState == OVERLAY_EXPANDED ? "1" : "0", iniPath);
 
 	// Save auto-adjust
-	WritePrivateProfileStringA("Audio", "AutoAdjust", m_bAutoAdjust ? "1" : "0", iniPath);
+	WritePrivateProfileStringA(u8"音频", "AutoAdjust", m_bAutoAdjust ? "1" : "0", iniPath);
 
 	// Save local volume (stored as 0-100 integer)
 	char volBuf[16];
 	sprintf_s(volBuf, sizeof(volBuf), "%d", (int)(m_localVolume * 100.0f));
-	WritePrivateProfileStringA("Audio", "LocalVolume", volBuf, iniPath);
+	WritePrivateProfileStringA(u8"音频", "LocalVolume", volBuf, iniPath);
 }
+

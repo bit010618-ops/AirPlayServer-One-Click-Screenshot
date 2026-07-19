@@ -1593,7 +1593,7 @@ void CSDLPlayer::loopEvents()
           captureFlags);
 
       if (ImGui::Button(
-  "Region Capture",
+  u8"区域截图",
   ImVec2(160.0f, 0.0f))) {
           ScreenSnipperStartCapture();
       }
@@ -2047,7 +2047,7 @@ void CSDLPlayer::initVideo(int width, int height)
 	m_windowHeight = height;
 
 	// Create SDL2 window with resizable support and HiDPI awareness
-	m_window = SDL_CreateWindow("AirPlay Receiver",
+	m_window = SDL_CreateWindow(u8"AirPlay 接收器",
 		SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
 		width, height,
 		SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
@@ -2592,7 +2592,7 @@ void CSDLPlayer::setPictureInPictureMode(bool enabled)
 		if (m_pipRestoreMaximized) {
 			SDL_MaximizeWindow(m_window);
 		}
-		SDL_SetWindowTitle(m_window, "AirPlay Receiver");
+		SDL_SetWindowTitle(m_window, u8"AirPlay 接收器");
 		m_windowedX = m_pipRestoreX;
 		m_windowedY = m_pipRestoreY;
 		m_windowedW = m_pipRestoreW;
@@ -3303,7 +3303,7 @@ void CSDLPlayer::showWindow()
 		SDL_RaiseWindow(m_window);
 		m_bWindowVisible = true;
 		m_bMainWindowMinimized = false;
-		SDL_SetWindowTitle(m_window, "AirPlay Receiver");
+		SDL_SetWindowTitle(m_window, u8"AirPlay 接收器");
 	}
 }
 
@@ -3355,4 +3355,5 @@ void CSDLPlayer::requestResize(int width, int height)
 	m_pendingResizeWidth = width;
 	m_pendingResizeHeight = height;
 }
+
 

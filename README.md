@@ -1,4 +1,4 @@
-# AirPlayServer for Windows
+﻿# AirPlayServer for Windows
 
 AirPlayServer receives AirPlay video, audio, and screen mirroring on Windows.
 
@@ -188,3 +188,23 @@ The repository contains code from several libraries. Check each library's licens
 Thanks to [fingergit](https://github.com/fingergit/airplay2-win) and the AirPlay reverse engineering community.
 
 This is an unofficial implementation. Apple, AirPlay, and related trademarks belong to Apple Inc.
+
+## 中文标注截图增强版
+
+在原有区域截图按钮位置和显示逻辑不变的前提下，新增：
+
+- 软件自身可见界面中文化；
+- 中文字体字形支持；
+- 截图时冻结桌面并使用双缓冲，减少闪烁；
+- 选区保持原亮度，外围轻微变暗；
+- 矩形、圆形、三角形、箭头、画笔和马赛克；
+- 撤销、完成和取消；
+- 点击“完成”或按 Enter 后直接复制到剪贴板；
+- 不生成截图文件。
+
+快捷操作：
+
+- `Ctrl+Shift+C`：启动区域截图；
+- `Ctrl+Z` 或退格键：撤销；
+- `Enter`：完成并复制；
+- `Esc` 或鼠标右键：取消。

@@ -76,7 +76,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         }
     }
     if (strlen(hostName) == 0) {
-        strcpy_s(hostName, sizeof(hostName), "AirPlay Server");
+        strcpy_s(hostName, sizeof(hostName), u8"AirPlay 接收器");
     }
 
     // Check Bonjour Service (required for mDNS device discovery)
@@ -189,3 +189,4 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     return 0;
 }
+
