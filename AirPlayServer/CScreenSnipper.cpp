@@ -116,11 +116,13 @@ namespace
     class ScreenSnipper
     {
     public:
+        static ScreenSnipper* s_mouseHookOwner;
         ScreenSnipper()
             : m_thread(NULL)
             , m_readyEvent(NULL)
             , m_threadId(0)
             , m_hotkeyRegistered(false)
+            , m_mouseHook(NULL)
             , m_window(NULL)
             , m_screenDC(NULL)
             , m_screenBitmap(NULL)
@@ -216,6 +218,39 @@ namespace
         }
 
     private:
+        static LRESULT CALLBACK MouseHookProc(
+            int code,
+            WPARAM message,
+            LPARAM data)
+        {
+            if (code == HC_ACTION &&
+                s_mouseHookOwner != NULL &&
+                (message == WM_XBUTTONDOWN ||
+                 message == WM_XBUTTONUP)) {
+                const MSLLHOOKSTRUCT* mouse =
+                    reinterpret_cast<const MSLLHOOKSTRUCT*>(data);
+
+                const WORD button =
+                    HIWORD(mouse->mouseData);
+
+                if (button == XBUTTON1) {
+                    if (message == WM_XBUTTONDOWN) {
+                        s_mouseHookOwner->StartCapture();
+                    }
+
+                    // Consume both events so Mouse Button 4 does not
+                    // also trigger browser Back while this app runs.
+                    return 1;
+                }
+            }
+
+            return CallNextHookEx(
+                NULL,
+                code,
+                message,
+                data);
+        }
+
         static DWORD WINAPI ThreadEntry(LPVOID parameter)
         {
             ScreenSnipper* self =
@@ -246,6 +281,18 @@ namespace
                     MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT,
                     'C') != FALSE;
 
+            s_mouseHookOwner = this;
+            m_mouseHook = SetWindowsHookExW(
+                WH_MOUSE_LL,
+                MouseHookProc,
+                GetModuleHandleW(NULL),
+                0);
+
+            if (m_mouseHook == NULL) {
+                printf(
+                    "Warning: Mouse Button 4 capture could not be registered.\n");
+            }
+
             if (m_readyEvent != NULL) {
                 SetEvent(m_readyEvent);
             }
@@ -261,6 +308,12 @@ namespace
                 TranslateMessage(&message);
                 DispatchMessageW(&message);
             }
+
+            if (m_mouseHook != NULL) {
+                UnhookWindowsHookEx(m_mouseHook);
+                m_mouseHook = NULL;
+            }
+            s_mouseHookOwner = NULL;
 
             if (m_hotkeyRegistered) {
                 UnregisterHotKey(NULL, kHotkeyId);
@@ -1374,7 +1427,7 @@ namespace
 
             const wchar_t* message =
                 m_state == CaptureState::Selecting
-                    ? L"Drag to select an area. Esc or right-click to cancel."
+                    ? L"Drag to select an area. Mouse Button 4 starts capture; Esc or right-click cancels."
                     : L"Choose a tool below. Click the check mark to copy.";
 
             HFONT font = CreateUiFont(20, FW_SEMIBOLD);
@@ -1973,6 +2026,7 @@ namespace
         HANDLE m_readyEvent;
         DWORD m_threadId;
         bool m_hotkeyRegistered;
+        HHOOK m_mouseHook;
 
         HWND m_window;
 
@@ -2006,6 +2060,7 @@ namespace
         std::atomic<bool> m_captureActive;
     };
 
+    ScreenSnipper* ScreenSnipper::s_mouseHookOwner = NULL;
     ScreenSnipper g_snipper;
 }
 
