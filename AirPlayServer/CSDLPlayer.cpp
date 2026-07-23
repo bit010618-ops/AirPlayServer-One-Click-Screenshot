@@ -14,6 +14,202 @@
 #include <audioclient.h>
 #include <functiondiscoverykeys_devpkey.h>
 #include <bcrypt.h>
+#include <vector>
+#include <Windows.h>
+#include <SDL_syswm.h>
+
+// AIRPLAY_WINDOW_LIFECYCLE_FIX_V13
+namespace
+{
+    std::vector<HWND> g_airPlayWindowsHiddenForMinimize;
+
+    HWND AirPlayGetNativeWindow(SDL_Window* window)
+    {
+        if (window == NULL) {
+            return NULL;
+        }
+
+        SDL_SysWMinfo info = {};
+        SDL_VERSION(&info.version);
+
+        if (SDL_GetWindowWMInfo(window, &info) != SDL_TRUE) {
+            return NULL;
+        }
+
+#if defined(_WIN32)
+        return info.info.win.window;
+#else
+        return NULL;
+#endif
+    }
+
+#if defined(_WIN32)
+    BOOL CALLBACK AirPlayHideAuxiliaryWindow(
+        HWND candidate,
+        LPARAM parameter)
+    {
+        HWND mainWindow =
+            reinterpret_cast<HWND>(parameter);
+
+        if (candidate == NULL ||
+            candidate == mainWindow ||
+            !IsWindowVisible(candidate)) {
+            return TRUE;
+        }
+
+        DWORD processId = 0;
+        GetWindowThreadProcessId(candidate, &processId);
+
+        if (processId != GetCurrentProcessId()) {
+            return TRUE;
+        }
+
+        const HWND owner = GetWindow(candidate, GW_OWNER);
+        const LONG_PTR style =
+            GetWindowLongPtrW(candidate, GWL_STYLE);
+
+        if (owner == mainWindow ||
+            (style & WS_POPUP) != 0) {
+            g_airPlayWindowsHiddenForMinimize.push_back(candidate);
+            ShowWindow(candidate, SW_HIDE);
+        }
+
+        return TRUE;
+    }
+#endif
+
+    void AirPlayHideAuxiliaryWindows(SDL_Window* mainSdlWindow)
+    {
+#if defined(_WIN32)
+        g_airPlayWindowsHiddenForMinimize.clear();
+
+        const HWND mainWindow =
+            AirPlayGetNativeWindow(mainSdlWindow);
+
+        if (mainWindow != NULL) {
+            EnumWindows(
+                AirPlayHideAuxiliaryWindow,
+                reinterpret_cast<LPARAM>(mainWindow));
+        }
+#else
+        (void)mainSdlWindow;
+#endif
+    }
+
+    void AirPlayRestoreAuxiliaryWindows()
+    {
+#if defined(_WIN32)
+        for (HWND window : g_airPlayWindowsHiddenForMinimize) {
+            if (window != NULL && IsWindow(window)) {
+                ShowWindow(window, SW_SHOWNOACTIVATE);
+                InvalidateRect(window, NULL, FALSE);
+            }
+        }
+
+        g_airPlayWindowsHiddenForMinimize.clear();
+#endif
+    }
+
+    bool AirPlayMainWindowDrawable(SDL_Window* window)
+    {
+        if (window == NULL) {
+            return false;
+        }
+
+        const Uint32 flags = SDL_GetWindowFlags(window);
+
+        return (flags &
+                (SDL_WINDOW_MINIMIZED |
+                 SDL_WINDOW_HIDDEN)) == 0;
+    }
+
+    void AirPlayApplyInitialWindowLayout(SDL_Window* window)
+    {
+        if (window == NULL) {
+            return;
+        }
+
+        int displayIndex = SDL_GetWindowDisplayIndex(window);
+        if (displayIndex < 0) {
+            displayIndex = 0;
+        }
+
+        SDL_Rect usableBounds = {};
+        if (SDL_GetDisplayUsableBounds(
+                displayIndex,
+                &usableBounds) != 0) {
+            return;
+        }
+
+        int width = usableBounds.w * 3 / 5;
+        int height = usableBounds.h * 2 / 3;
+
+        if (width < 640) {
+            width = usableBounds.w < 640
+                ? usableBounds.w
+                : 640;
+        }
+        if (height < 480) {
+            height = usableBounds.h < 480
+                ? usableBounds.h
+                : 480;
+        }
+
+        if (width > usableBounds.w) {
+            width = usableBounds.w;
+        }
+        if (height > usableBounds.h) {
+            height = usableBounds.h;
+        }
+
+        const int x =
+            usableBounds.x +
+            (usableBounds.w - width) / 2;
+        const int y =
+            usableBounds.y +
+            (usableBounds.h - height) / 2;
+
+        SDL_SetWindowSize(window, width, height);
+        SDL_SetWindowPosition(window, x, y);
+    }
+
+    int SDLCALL AirPlayWindowLifecycleWatch(
+        void* userData,
+        SDL_Event* event)
+    {
+        SDL_Window* mainWindow =
+            static_cast<SDL_Window*>(userData);
+
+        if (mainWindow == NULL ||
+            event == NULL ||
+            event->type != SDL_WINDOWEVENT ||
+            event->window.windowID !=
+                SDL_GetWindowID(mainWindow)) {
+            return 1;
+        }
+
+        switch (event->window.event) {
+        case SDL_WINDOWEVENT_MINIMIZED:
+        case SDL_WINDOWEVENT_HIDDEN:
+            AirPlayHideAuxiliaryWindows(mainWindow);
+            break;
+
+        case SDL_WINDOWEVENT_RESTORED:
+        case SDL_WINDOWEVENT_SHOWN:
+            AirPlayRestoreAuxiliaryWindows();
+            break;
+
+        case SDL_WINDOWEVENT_EXPOSED:
+            break;
+
+        default:
+            break;
+        }
+
+        return 1;
+    }
+}
+
 
 // Link against required libraries
 #pragma comment(lib, "ole32.lib")
@@ -1664,7 +1860,9 @@ void CSDLPlayer::loopEvents()
 		m_imgui.Render();
 
 		// 5. Present (no VSync - immediate display for lowest latency)
-		SDL_RenderPresent(m_renderer);
+		if (AirPlayMainWindowDrawable(m_window)) {
+		    SDL_RenderPresent(m_renderer);
+		}
 		if (releasePinCaptureAfterPresent) {
 			// The currently presented frame contains no PIN, so capture exclusion
 			// can now be removed without exposing a retained PIN frame.
@@ -2051,6 +2249,12 @@ void CSDLPlayer::initVideo(int width, int height)
 		SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
 		width, height,
 		SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+	if (m_window != NULL) {
+	    AirPlayApplyInitialWindowLayout(m_window);
+	    SDL_AddEventWatch(
+	        AirPlayWindowLifecycleWatch,
+	        m_window);
+	}
 
 	if (m_window == NULL) {
 		printf("Could not create window: %s\n", SDL_GetError());
@@ -2311,7 +2515,9 @@ void CSDLPlayer::renderDuringNativeResize()
 		m_imgui.RenderHomeScreen(m_serverName, m_server.isRunning());
 	}
 	m_imgui.Render();
-	SDL_RenderPresent(m_renderer);
+	if (AirPlayMainWindowDrawable(m_window)) {
+	    SDL_RenderPresent(m_renderer);
+	}
 
 	m_nativeResizeRendering = false;
 }
@@ -3069,6 +3275,10 @@ void CSDLPlayer::unInitVideo()
 	}
 
 	if (m_window != NULL) {
+		SDL_DelEventWatch(
+		    AirPlayWindowLifecycleWatch,
+		    m_window);
+		AirPlayRestoreAuxiliaryWindows();
 		SDL_DestroyWindow(m_window);
 		m_window = NULL;
 	}
