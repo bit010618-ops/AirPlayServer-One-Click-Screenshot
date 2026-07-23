@@ -1,0 +1,162 @@
+name: Fix minimize ghost and center startup window v13
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix-window-lifecycle:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Apply window lifecycle patch
+        shell: pwsh
+        run: |
+          $patchBase64 = @(
+            'ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCmltcG9ydCByZQoKc291cmNlX3BhdGggPSBQYXRoKCJBaXJQbGF5U2VydmVyL0NTRExQbGF5ZXIuY3BwIikKaWYgbm90IHNvdXJjZV9wYXRoLmV4aXN0cygpOgogICAgcmFpc2UgU3lzdGVtRXhpdCgiQWlyUGxheVNlcnZlci9DU0RMUGxheWVyLmNwcCB3YXMgbm90IGZvdW5kLiIpCgpyYXcgPSBzb3VyY2VfcGF0aC5yZWFkX2J5dGVzKCkKYm9tID0gcmF3LnN0YXJ0c3dpdGgoYiJceGVmXHhiYlx4YmYiKQp0ZXh0ID0gcmF3LmRlY29kZSgidXRmLTgtc2lnIikKbmV3bGluZSA9ICJcclxuIiBpZiAiXHJcbiIgaW4gdGV4dCBlbHNlICJcbiIKCm1hcmtlciA9ICJBSVJQTEFZX1dJTkRPV19MSUZFQ1lDTEVfRklYX1YxMyIKaWYgbWFya2VyIGluIHRleHQ6CiAgICBwcmludCgiVGhlIHYxMyB3aW5kb3cgbGlmZWN5Y2xlIGZpeCBpcyBhbHJlYWR5IHByZXNlbnQuIikKICAgIHJhaXNlIFN5c3RlbUV4aXQoMCkKCmRlZiBmYWlsKG1lc3NhZ2U6IHN0cikgLT4gTm9uZToKICAgIHJhaXNlIFN5c3RlbUV4aXQobWVzc2FnZSkKCmluY2x1ZGVfbGluZXMgPSBbXQppZiBub3QgcmUuc2VhcmNoKHInKD9tKV5ccyojXHMqaW5jbHVkZVxzKls8Il12ZWN0b3JbPiJdJywgdGV4dCk6CiAgICBpbmNsdWRlX2xpbmVzLmFwcGVuZCgiI2luY2x1ZGUgPHZlY3Rvcj4iKQppZiBub3QgcmUuc2VhcmNoKHInKD9tKV5ccyojXHMqaW5jbHVkZVxzKls8Il13aW5kb3dzXC5oWz4iXScsIHRleHQsIHJlLkkpOgogICAgaW5jbHVkZV9saW5lcy5hcHBlbmQoIiNpbmNsdWRlIDxXaW5kb3dzLmg+IikKaWYgbm90IHJlLnNlYXJjaChyJyg/bSleXHMqI1xzKmluY2x1ZGVccypbPCJdU0RMX3N5c3dtXC5oWz4iXScsIHRleHQsIHJlLkkpOgogICAgaW5jbHVkZV9saW5lcy5hcHBlbmQoIiNpbmNsdWRlIDxTRExfc3lzd20uaD4iKQoKaW5jbHVkZV9tYXRjaGVzID0gbGlzdCgKICAgIHJlLmZpbmRpdGVyKHInKD9tKV5ccyojXHMqaW5jbHVkZVteXHJcbl0qKD86XHI/XG58JCknLCB0ZXh0KQopCmlmIG5vdCBpbmNsdWRlX21hdGNoZXM6CiAgICBmYWlsKCJDb3VsZCBub3QgbG9jYXRlIHRoZSBDKysgaW5jbHVkZSBibG9jay4iKQoKaGVscGVyID0gcicnJwovLyBBSVJQTEFZX1dJTkRPV19MSUZFQ1lDTEVfRklYX1YxMwpuYW1lc3BhY2UKewogICAgc3RkOjp2ZWN0b3I8SFdORD4gZ19haXJQbGF5V2luZG93c0hpZGRlbkZvck1pbmltaXplOwoKICAgIEhXTkQgQWlyUGxheUdldE5hdGl2ZVdpbmRvdyhTRExfV2luZG93KiB3aW5kb3cpCiAgICB7CiAgICAgICAgaWYgKHdpbmRvdyA9PSBOVUxMKSB7CiAgICAgICAgICAgIHJldHVybiBOVUxMOwogICAgICAgIH0KCiAgICAgICAgU0RMX1N5c1dNaW5mbyBpbmZvID0ge307CiAgICAgICAgU0RMX1ZFUlNJT04oJmluZm8udmVyc2lvbik7CgogICAgICAgIGlmIChTRExfR2V0V2luZG93V01JbmZvKHdpbmRvdywgJmluZm8pICE9IFNETF9UUlVFKSB7CiAgICAgICAgICAgIHJldHVybiBOVUxMOwogICAgICAgIH0KCiNpZiBkZWZpbmVkKF9XSU4zMikKICAgICAgICByZXR1cm4gaW5mby5pbmZvLndpbi53aW5kb3c7CiNlbHNlCiAgICAgICAgcmV0dXJuIE5VTEw7CiNlbmRpZgogICAgfQoKI2lmIGRlZmluZWQoX1dJTjMyKQogICAgQk9PTCBDQUxMQkFDSyBBaXJQbGF5SGlkZUF1eGlsaWFyeVdpbmRvdygKICAgICAgICBIV05EIGNhbmRpZGF0ZSwKICAgICAgICBMUEFSQU0gcGFyYW1ldGVyKQogICAgewogICAgICAgIEhXTkQgbWFpbldpbmRvdyA9CiAgICAgICAgICAgIHJlaW50ZXJwcmV0X2Nhc3Q8SFdORD4ocGFyYW1ldGVyKTsKCiAgICAgICAgaWYgKGNhbmRpZGF0ZSA9PSBOVUxMIHx8CiAgICAgICAgICAgIGNhbmRpZGF0ZSA9PSBtYWluV2luZG93IHx8CiAgICAgICAgICAgICFJc1dpbmRvd1Zpc2libGUoY2FuZGlkYXRlKSkgewogICAgICAgICAgICByZXR1cm4gVFJVRTsKICAgICAgICB9CgogICAgICAgIERXT1JEIHByb2Nlc3NJZCA9IDA7CiAgICAgICAgR2V0V2luZG93VGhyZWFkUHJvY2Vzc0lkKGNhbmRpZGF0ZSwgJnByb2Nlc3NJZCk7CgogICAgICAgIGlmIChwcm9jZXNzSWQgIT0gR2V0Q3VycmVudFByb2Nlc3NJZCgpKSB7CiAgICAgICAgICAgIHJldHVybiBUUlVFOwogICAgICAgIH0KCiAgICAgICAgY29uc3QgSFdORCBvd25lciA9IEdldFdpbmRvdyhjYW5kaWRhdGUsIEdXX09XTkVSKTsKICAgICAgICBjb25zdCBMT05HX1BUUiBzdHlsZSA9CiAgICAgICAgICAgIEdldFdpbmRvd0xvbmdQdHJXKGNhbmRpZGF0ZSwgR1dMX1NUWUxFKTsKCiAgICAgICAgaWYgKG93bmVyID09IG1haW5XaW5kb3cgfHwKICAgICAgICAgICAgKHN0eWxlICYgV1NfUE9QVVApICE9IDApIHsKICAgICAgICAgICAgZ19haXJQbGF5V2luZG93c0hpZGRlbkZvck1pbmltaXplLnB1c2hfYmFjayhjYW5kaWRhdGUpOwogICAgICAgICAgICBTaG93V2luZG93KGNhbmRpZGF0ZSwgU1dfSElERSk7CiAgICAgICAgfQoKICAgICAgICByZXR1cm4gVFJVRTsKICAgIH0KI2VuZGlmCgogICAgdm9pZCBBaXJQbGF5SGlkZUF1eGlsaWFyeVdpbmRvd3MoU0RMX1dpbmRvdyogbWFpblNkbFdpbmRvdykKICAgIHsKI2lmIGRlZmluZWQoX1dJTjMyKQogICAgICAgIGdfYWlyUGxheVdpbmRvd3NIaWRkZW5Gb3JNaW5pbWl6ZS5jbGVhcigpOwoKICAgICAgICBjb25zdCBIV05EIG1haW5XaW5kb3cgPQogICAgICAgICAgICBBaXJQbGF5R2V0TmF0aXZlV2luZG93KG1haW5TZGxXaW5kb3cpOwoKICAgICAgICBpZiAobWFpbldpbmRvdyAhPSBOVUxMKSB7CiAgICAgICAgICAgIEVudW1XaW5kb3dzKAogICAgICAgICAgICAgICAgQWlyUGxheUhpZGVBdXhpbGlhcnlXaW5kb3csCiAgICAgICAgICAgICAgICByZWludGVycHJldF9jYXN0PExQQVJBTT4obWFpbldpbmRvdykpOwogICAgICAgIH0KI2Vsc2UKICAgICAgICAodm9pZCltYWluU2RsV2luZG93OwojZW5kaWYKICAgIH0KCiAgICB2b2lkIEFpclBsYXlSZXN0b3JlQXV4aWxpYXJ5V2luZG93cygpCiAgICB7CiNpZiBkZWZp'
+            'bmVkKF9XSU4zMikKICAgICAgICBmb3IgKEhXTkQgd2luZG93IDogZ19haXJQbGF5V2luZG93c0hpZGRlbkZvck1pbmltaXplKSB7CiAgICAgICAgICAgIGlmICh3aW5kb3cgIT0gTlVMTCAmJiBJc1dpbmRvdyh3aW5kb3cpKSB7CiAgICAgICAgICAgICAgICBTaG93V2luZG93KHdpbmRvdywgU1dfU0hPV05PQUNUSVZBVEUpOwogICAgICAgICAgICAgICAgSW52YWxpZGF0ZVJlY3Qod2luZG93LCBOVUxMLCBGQUxTRSk7CiAgICAgICAgICAgIH0KICAgICAgICB9CgogICAgICAgIGdfYWlyUGxheVdpbmRvd3NIaWRkZW5Gb3JNaW5pbWl6ZS5jbGVhcigpOwojZW5kaWYKICAgIH0KCiAgICBib29sIEFpclBsYXlNYWluV2luZG93RHJhd2FibGUoU0RMX1dpbmRvdyogd2luZG93KQogICAgewogICAgICAgIGlmICh3aW5kb3cgPT0gTlVMTCkgewogICAgICAgICAgICByZXR1cm4gZmFsc2U7CiAgICAgICAgfQoKICAgICAgICBjb25zdCBVaW50MzIgZmxhZ3MgPSBTRExfR2V0V2luZG93RmxhZ3Mod2luZG93KTsKCiAgICAgICAgcmV0dXJuIChmbGFncyAmCiAgICAgICAgICAgICAgICAoU0RMX1dJTkRPV19NSU5JTUlaRUQgfAogICAgICAgICAgICAgICAgIFNETF9XSU5ET1dfSElEREVOKSkgPT0gMDsKICAgIH0KCiAgICB2b2lkIEFpclBsYXlBcHBseUluaXRpYWxXaW5kb3dMYXlvdXQoU0RMX1dpbmRvdyogd2luZG93KQogICAgewogICAgICAgIGlmICh3aW5kb3cgPT0gTlVMTCkgewogICAgICAgICAgICByZXR1cm47CiAgICAgICAgfQoKICAgICAgICBpbnQgZGlzcGxheUluZGV4ID0gU0RMX0dldFdpbmRvd0Rpc3BsYXlJbmRleCh3aW5kb3cpOwogICAgICAgIGlmIChkaXNwbGF5SW5kZXggPCAwKSB7CiAgICAgICAgICAgIGRpc3BsYXlJbmRleCA9IDA7CiAgICAgICAgfQoKICAgICAgICBTRExfUmVjdCB1c2FibGVCb3VuZHMgPSB7fTsKICAgICAgICBpZiAoU0RMX0dldERpc3BsYXlVc2FibGVCb3VuZHMoCiAgICAgICAgICAgICAgICBkaXNwbGF5SW5kZXgsCiAgICAgICAgICAgICAgICAmdXNhYmxlQm91bmRzKSAhPSAwKSB7CiAgICAgICAgICAgIHJldHVybjsKICAgICAgICB9CgogICAgICAgIGludCB3aWR0aCA9IHVzYWJsZUJvdW5kcy53ICogMyAvIDU7CiAgICAgICAgaW50IGhlaWdodCA9IHVzYWJsZUJvdW5kcy5oICogMiAvIDM7CgogICAgICAgIGlmICh3aWR0aCA8IDY0MCkgewogICAgICAgICAgICB3aWR0aCA9IHVzYWJsZUJvdW5kcy53IDwgNjQwCiAgICAgICAgICAgICAgICA/IHVzYWJsZUJvdW5kcy53CiAgICAgICAgICAgICAgICA6IDY0MDsKICAgICAgICB9CiAgICAgICAgaWYgKGhlaWdodCA8IDQ4MCkgewogICAgICAgICAgICBoZWlnaHQgPSB1c2FibGVCb3VuZHMuaCA8IDQ4MAogICAgICAgICAgICAgICAgPyB1c2FibGVCb3VuZHMuaAogICAgICAgICAgICAgICAgOiA0ODA7CiAgICAgICAgfQoKICAgICAgICBpZiAod2lkdGggPiB1c2FibGVCb3VuZHMudykgewogICAgICAgICAgICB3aWR0aCA9IHVzYWJsZUJvdW5kcy53OwogICAgICAgIH0KICAgICAgICBpZiAoaGVpZ2h0ID4gdXNhYmxlQm91bmRzLmgpIHsKICAgICAgICAgICAgaGVpZ2h0ID0gdXNhYmxlQm91bmRzLmg7CiAgICAgICAgfQoKICAgICAgICBjb25zdCBpbnQgeCA9CiAgICAgICAgICAgIHVzYWJsZUJvdW5kcy54ICsKICAgICAgICAgICAgKHVzYWJsZUJvdW5kcy53IC0gd2lkdGgpIC8gMjsKICAgICAgICBjb25zdCBpbnQgeSA9CiAgICAgICAgICAgIHVzYWJsZUJvdW5kcy55ICsKICAgICAgICAgICAgKHVzYWJsZUJvdW5kcy5oIC0gaGVpZ2h0KSAvIDI7CgogICAgICAgIFNETF9TZXRXaW5kb3dTaXplKHdpbmRvdywgd2lkdGgsIGhlaWdodCk7CiAgICAgICAgU0RMX1NldFdpbmRvd1Bvc2l0aW9uKHdpbmRvdywgeCwgeSk7CiAgICB9CgogICAgaW50IFNETENBTEwgQWlyUGxheVdpbmRvd0xpZmVjeWNsZVdhdGNoKAogICAgICAgIHZvaWQqIHVzZXJEYXRhLAogICAgICAgIFNETF9FdmVudCogZXZlbnQpCiAgICB7CiAgICAgICAgU0RMX1dpbmRvdyogbWFpbldpbmRvdyA9CiAgICAgICAgICAgIHN0YXRpY19jYXN0PFNETF9XaW5kb3cqPih1c2VyRGF0YSk7CgogICAgICAgIGlmIChtYWluV2luZG93ID09IE5VTEwgfHwKICAgICAgICAgICAgZXZlbnQgPT0gTlVMTCB8fAogICAgICAgICAgICBldmVudC0+dHlwZSAhPSBTRExfV0lORE9XRVZFTlQgfHwKICAgICAgICAgICAgZXZlbnQtPndpbmRvdy53aW5kb3dJRCAhPQogICAgICAgICAgICAgICAgU0RMX0dldFdpbmRvd0lEKG1haW5XaW5kb3cpKSB7CiAgICAgICAgICAgIHJldHVybiAxOwogICAgICAgIH0KCiAgICAgICAgc3dpdGNoIChldmVudC0+d2luZG93LmV2ZW50KSB7CiAgICAgICAgY2FzZSBTRExfV0lORE9XRVZFTlRfTUlOSU1JWkVEOgogICAgICAgIGNhc2UgU0RMX1dJTkRPV0VWRU5UX0hJRERFTjoKICAgICAgICAgICAgQWlyUGxheUhpZGVBdXhpbGlhcnlXaW5kb3dzKG1haW5XaW5kb3cpOwogICAgICAgICAgICBicmVhazsKCiAgICAgICAgY2FzZSBTRExfV0lORE9XRVZFTlRfUkVTVE9SRUQ6CiAgICAgICAgY2FzZSBTRExfV0lORE9XRVZFTlRfU0hPV046CiAgICAgICAgICAgIEFpclBsYXlSZXN0b3JlQXV4aWxpYXJ5V2luZG93cygpOwogICAgICAgICAgICBicmVhazsKCiAgICAgICAgY2FzZSBTRExfV0lORE9XRVZFTlRfRVhQT1NFRDoKICAgICAgICAgICAgYnJlYWs7CgogICAgICAgIGRlZmF1bHQ6CiAgICAgICAgICAgIGJyZWFrOwogICAgICAgIH0KCiAgICAgICAgcmV0dXJuIDE7CiAgICB9Cn0KJycnCgppbnNlcnRpb25fYXQgPSBpbmNsdWRlX21hdGNoZXNbLTFdLmVuZCgpCnByZWZpeCA9ICIiCmlmIGluY2x1ZGVfbGluZXM6CiAgICBwcmVmaXggPSBuZXdsaW5lLmpvaW4oaW5jbHVkZV9saW5lcykgKyBuZXdsaW5lCmhlbHBlcl90ZXh0ID0gaGVscGVyLnN0cmlwKCJcbiIpLnJlcGxhY2UoIlxuIiwgbmV3bGluZSkgKyBuZXdsaW5lICsgbmV3bGluZQoKdGV4dCA9ICgKICAgIHRleHRbOmluc2VydGlvbl9hdF0KICAg'
+            'ICsgcHJlZml4CiAgICArIG5ld2xpbmUKICAgICsgaGVscGVyX3RleHQKICAgICsgdGV4dFtpbnNlcnRpb25fYXQ6XQopCgpjcmVhdGVfcGF0dGVybiA9IHJlLmNvbXBpbGUoCiAgICByJyg/cykoP1A8aW5kZW50Pl5bIFx0XSopJwogICAgcicoP1A8bGhzPig/OnRoaXMtPik/bV93aW5kb3cpXHMqPVxzKicKICAgIHInU0RMX0NyZWF0ZVdpbmRvd1xzKlwoJwogICAgcicuKj8nCiAgICByJ1wpXHMqOycsCiAgICByZS5NLAopCmNyZWF0ZV9tYXRjaCA9IGNyZWF0ZV9wYXR0ZXJuLnNlYXJjaCh0ZXh0KQppZiBjcmVhdGVfbWF0Y2ggaXMgTm9uZToKICAgIGZhaWwoIkNvdWxkIG5vdCBsb2NhdGUgbV93aW5kb3cgPSBTRExfQ3JlYXRlV2luZG93KC4uLikuIikKCmluZGVudCA9IGNyZWF0ZV9tYXRjaC5ncm91cCgiaW5kZW50IikKbGF5b3V0X2Jsb2NrID0gbmV3bGluZS5qb2luKFsKICAgICIiLAogICAgaW5kZW50ICsgImlmIChtX3dpbmRvdyAhPSBOVUxMKSB7IiwKICAgIGluZGVudCArICIgICAgQWlyUGxheUFwcGx5SW5pdGlhbFdpbmRvd0xheW91dChtX3dpbmRvdyk7IiwKICAgIGluZGVudCArICIgICAgU0RMX0FkZEV2ZW50V2F0Y2goIiwKICAgIGluZGVudCArICIgICAgICAgIEFpclBsYXlXaW5kb3dMaWZlY3ljbGVXYXRjaCwiLAogICAgaW5kZW50ICsgIiAgICAgICAgbV93aW5kb3cpOyIsCiAgICBpbmRlbnQgKyAifSIsCl0pCgppbnNlcnRfcG9zID0gY3JlYXRlX21hdGNoLmVuZCgpCnRleHQgPSB0ZXh0WzppbnNlcnRfcG9zXSArIGxheW91dF9ibG9jayArIHRleHRbaW5zZXJ0X3BvczpdCgpkZXN0cm95X3BhdHRlcm4gPSByZS5jb21waWxlKAogICAgcicoP20pXig/UDxpbmRlbnQ+WyBcdF0qKScKICAgIHInU0RMX0Rlc3Ryb3lXaW5kb3dccypcKFxzKm1fd2luZG93XHMqXClccyo7JwopCgpkZWYgcmVwbGFjZV9kZXN0cm95KG1hdGNoOiByZS5NYXRjaCkgLT4gc3RyOgogICAgZGVzdHJveV9pbmRlbnQgPSBtYXRjaC5ncm91cCgiaW5kZW50IikKICAgIHJldHVybiBuZXdsaW5lLmpvaW4oWwogICAgICAgIGRlc3Ryb3lfaW5kZW50ICsgIlNETF9EZWxFdmVudFdhdGNoKCIsCiAgICAgICAgZGVzdHJveV9pbmRlbnQgKyAiICAgIEFpclBsYXlXaW5kb3dMaWZlY3ljbGVXYXRjaCwiLAogICAgICAgIGRlc3Ryb3lfaW5kZW50ICsgIiAgICBtX3dpbmRvdyk7IiwKICAgICAgICBkZXN0cm95X2luZGVudCArICJBaXJQbGF5UmVzdG9yZUF1eGlsaWFyeVdpbmRvd3MoKTsiLAogICAgICAgIG1hdGNoLmdyb3VwKDApLAogICAgXSkKCnRleHQsIGRlc3Ryb3lfY291bnQgPSBkZXN0cm95X3BhdHRlcm4uc3VibihyZXBsYWNlX2Rlc3Ryb3ksIHRleHQpCmlmIGRlc3Ryb3lfY291bnQgPT0gMDoKICAgIGZhaWwoIkNvdWxkIG5vdCBsb2NhdGUgU0RMX0Rlc3Ryb3lXaW5kb3cobV93aW5kb3cpLiIpCgpwcmVzZW50X3BhdHRlcm4gPSByZS5jb21waWxlKAogICAgcicoP20pXig/UDxpbmRlbnQ+WyBcdF0qKScKICAgIHInU0RMX1JlbmRlclByZXNlbnRccypcKFxzKm1fcmVuZGVyZXJccypcKVxzKjsnCikKCmRlZiByZXBsYWNlX3ByZXNlbnQobWF0Y2g6IHJlLk1hdGNoKSAtPiBzdHI6CiAgICBwcmVzZW50X2luZGVudCA9IG1hdGNoLmdyb3VwKCJpbmRlbnQiKQogICAgcmV0dXJuIG5ld2xpbmUuam9pbihbCiAgICAgICAgcHJlc2VudF9pbmRlbnQgKyAiaWYgKEFpclBsYXlNYWluV2luZG93RHJhd2FibGUobV93aW5kb3cpKSB7IiwKICAgICAgICBwcmVzZW50X2luZGVudCArICIgICAgU0RMX1JlbmRlclByZXNlbnQobV9yZW5kZXJlcik7IiwKICAgICAgICBwcmVzZW50X2luZGVudCArICJ9IiwKICAgIF0pCgp0ZXh0LCBwcmVzZW50X2NvdW50ID0gcHJlc2VudF9wYXR0ZXJuLnN1Ym4ocmVwbGFjZV9wcmVzZW50LCB0ZXh0KQppZiBwcmVzZW50X2NvdW50ID09IDA6CiAgICBmYWlsKCJDb3VsZCBub3QgbG9jYXRlIFNETF9SZW5kZXJQcmVzZW50KG1fcmVuZGVyZXIpLiIpCgppZiB0ZXh0LmNvdW50KG1hcmtlcikgIT0gMToKICAgIGZhaWwoCiAgICAgICAgIkV4cGVjdGVkIGV4YWN0bHkgb25lIHYxMyBsaWZlY3ljbGUgbWFya2VyOyAiCiAgICAgICAgZiJmb3VuZCB7dGV4dC5jb3VudChtYXJrZXIpfS4iCiAgICApCgpyZXF1aXJlZCA9IFsKICAgICJBaXJQbGF5QXBwbHlJbml0aWFsV2luZG93TGF5b3V0KG1fd2luZG93KTsiLAogICAgIlNETF9BZGRFdmVudFdhdGNoKCIsCiAgICAiU0RMX0RlbEV2ZW50V2F0Y2goIiwKICAgICJBaXJQbGF5TWFpbldpbmRvd0RyYXdhYmxlKG1fd2luZG93KSIsCiAgICAiU0RMX1dJTkRPV0VWRU5UX01JTklNSVpFRCIsCiAgICAiU0RMX1dJTkRPV0VWRU5UX1JFU1RPUkVEIiwKICAgICJBaXJQbGF5SGlkZUF1eGlsaWFyeVdpbmRvd3MobWFpbldpbmRvdyk7IiwKXQpmb3IgaXRlbSBpbiByZXF1aXJlZDoKICAgIGlmIGl0ZW0gbm90IGluIHRleHQ6CiAgICAgICAgZmFpbChmIlJlcXVpcmVkIHBhdGNoIGVsZW1lbnQgaXMgbWlzc2luZzoge2l0ZW19IikKCmVuY29kZWQgPSB0ZXh0LmVuY29kZSgidXRmLTgiKQppZiBib206CiAgICBlbmNvZGVkID0gYiJceGVmXHhiYlx4YmYiICsgZW5jb2RlZAoKc291cmNlX3BhdGgud3JpdGVfYnl0ZXMoZW5jb2RlZCkKCnByaW50KAogICAgIkFwcGxpZWQgdjEzOiBjZW50ZXJlZCAzLzUgeCAyLzMgc3RhcnR1cCBsYXlvdXQsICIKICAgIGYie3ByZXNlbnRfY291bnR9IGd1YXJkZWQgcHJlc2VudCBjYWxsKHMpLCAiCiAgICBmIntkZXN0cm95X2NvdW50fSB3YXRjaGVyIGNsZWFudXAgc2l0ZShzKS4iCikK'
+          ) -join ""
+
+          $patchPath = Join-Path `
+            $env:RUNNER_TEMP `
+            "fix-window-lifecycle-v13.py"
+
+          [IO.File]::WriteAllBytes(
+              $patchPath,
+              [Convert]::FromBase64String($patchBase64))
+
+          python $patchPath
+
+      - name: Verify source patch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $source = "AirPlayServer\CSDLPlayer.cpp"
+
+          Select-String -Path $source -Pattern "AIRPLAY_WINDOW_LIFECYCLE_FIX_V13"
+          Select-String -Path $source -Pattern "AirPlayApplyInitialWindowLayout"
+          Select-String -Path $source -Pattern "usableBounds.w \* 3 / 5"
+          Select-String -Path $source -Pattern "usableBounds.h \* 2 / 3"
+          Select-String -Path $source -Pattern "AirPlayMainWindowDrawable"
+          Select-String -Path $source -Pattern "SDL_WINDOWEVENT_MINIMIZED"
+          Select-String -Path $source -Pattern "AirPlayHideAuxiliaryWindows"
+
+          $changedFiles = @(git diff --name-only)
+          $unexpected = @(
+            $changedFiles |
+              Where-Object {
+                $_ -ne "AirPlayServer/CSDLPlayer.cpp"
+              }
+          )
+
+          if ($unexpected.Count -gt 0) {
+            throw (
+              "Unexpected files changed: " +
+              ($unexpected -join ", ")
+            )
+          }
+
+          git diff --check
+
+      - name: Build Release x64
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          msbuild AirPlay.sln `
+            /m `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /verbosity:minimal
+
+      - name: Prepare test package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $exe = Get-ChildItem `
+            -Path $env:GITHUB_WORKSPACE `
+            -Recurse `
+            -Filter AirPlayServer.exe |
+            Where-Object {
+              $_.FullName -match '[\\/]x64[\\/]Release[\\/]'
+            } |
+            Select-Object -First 1
+
+          if ($null -eq $exe) {
+            throw "Release x64 AirPlayServer.exe was not found."
+          }
+
+          $package = Join-Path `
+            $env:RUNNER_TEMP `
+            "AirPlayServer-Window-Fix-v13"
+
+          New-Item `
+            -ItemType Directory `
+            -Path $package `
+            -Force |
+            Out-Null
+
+          Copy-Item `
+            -Path (Join-Path $exe.Directory.FullName "*") `
+            -Destination $package `
+            -Recurse `
+            -Force
+
+          "ARTIFACT_PATH=$package" |
+            Out-File `
+              -FilePath $env:GITHUB_ENV `
+              -Encoding utf8 `
+              -Append
+
+      - name: Upload test package
+        uses: actions/upload-artifact@v4
+        with:
+          name: AirPlayServer-Window-Fix-v13
+          path: ${{ env.ARTIFACT_PATH }}
+          if-no-files-found: error
+
+      - name: Commit fix
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if ((git status --porcelain).Length -eq 0) {
+            Write-Host "No source changes need to be committed."
+            exit 0
+          }
+
+          git config user.name "github-actions[bot]"
+          git config user.email `
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -- AirPlayServer/CSDLPlayer.cpp
+
+          $staged = @(git diff --cached --name-only)
+
+          if (
+            $staged.Count -ne 1 -or
+            $staged[0] -ne "AirPlayServer/CSDLPlayer.cpp"
+          ) {
+            throw (
+              "Unexpected staged files: " +
+              ($staged -join ", ")
+            )
+          }
+
+          git commit -m `
+            "Fix minimize ghost and center startup window"
+
+          git push
